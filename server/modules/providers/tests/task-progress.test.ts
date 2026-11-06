@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createTaskProgressService } from '@/modules/providers/services/task-progress.service.js';
-import type { AnyRecord, NormalizedMessage } from '@/shared/types.js';
+import type { AnyRecord, NormalizedMessage } from '@/shared/index.js';
 
 const childId = '11111111-1111-4111-8111-111111111111';
 function fixture(directory: string, launch: Partial<NormalizedMessage>, providerExtras: AnyRecord = {}) {

@@ -1,6 +1,8 @@
 export { appendFilesInputTag, buildCodexInputItems, normalizeImageDescriptors } from './image-attachments.js';
 export { createCompleteMessage, createNormalizedMessage } from './utils.js';
 export type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter, SessionExecutionOwner, ProviderRunReservation } from './types.js';
+// Providers' task-progress reader and tests share the normalized conversation contract.
+export type { LLMProvider, NormalizedMessage, TaskProgressSnapshot } from './types.js';
 // GitHub authentication and Projects routes use the shared error/HTTP contract.
 export { AppError, asyncHandler, filterAttachmentsToUploadStore, normalizeProjectPath, validateWorkspacePath } from './utils.js';
 

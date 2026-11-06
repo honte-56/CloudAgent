@@ -5,7 +5,7 @@ import { sessionsDb } from '@/modules/database/index.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { AppError } from '@/shared/index.js';
-import type { AnyRecord, LLMProvider, TaskProgressSnapshot } from '@/shared/types.js';
+import type { AnyRecord, LLMProvider, TaskProgressSnapshot } from '@/shared/index.js';
 
 type Dependencies = {
   getSession: typeof sessionsDb.getSessionById;

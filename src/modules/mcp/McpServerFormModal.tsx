@@ -201,7 +201,7 @@ export default function McpServerFormModal({
                   <select
                     value={formData.workspacePath}
                     onChange={(event) => updateForm('workspacePath', event.target.value)}
-                    className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                    className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                     required
                   >
                     <option value="">{t('mcpForm.fields.selectProject')}</option>
@@ -242,7 +242,7 @@ export default function McpServerFormModal({
                 <select
                   value={formData.transport}
                   onChange={(event) => updateTransport(event.target.value as McpFormState['transport'])}
-                  className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                  className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                 >
                   {availableTransports.map((transport) => (
                     <option key={transport} value={transport}>
@@ -303,7 +303,7 @@ export default function McpServerFormModal({
                 <textarea
                   value={multilineText.args}
                   onChange={(event) => updateMultilineText('args', event.target.value)}
-                  className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                  className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                   rows={3}
                   placeholder="--port&#10;3000"
                 />
@@ -347,7 +347,7 @@ export default function McpServerFormModal({
               <textarea
                 value={multilineText.env}
                 onChange={(event) => updateMultilineText('env', event.target.value)}
-                className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                 rows={3}
                 placeholder="API_KEY=your-key&#10;DEBUG=true"
               />
@@ -362,7 +362,7 @@ export default function McpServerFormModal({
               <textarea
                 value={multilineText.headers}
                 onChange={(event) => updateMultilineText('headers', event.target.value)}
-                className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                 rows={3}
                 placeholder="Authorization=Bearer token&#10;X-API-Key=your-key"
               />
@@ -377,7 +377,7 @@ export default function McpServerFormModal({
               <textarea
                 value={multilineText.envVars}
                 onChange={(event) => updateMultilineText('envVars', event.target.value)}
-                className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-foreground focus:border-primary focus:ring-ring"
+                className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 text-foreground focus:border-primary focus:ring-ring focus:bg-card focus:border-ring/40"
                 rows={3}
                 placeholder="GITHUB_TOKEN&#10;API_KEY"
               />

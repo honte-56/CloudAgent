@@ -54,7 +54,7 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
       <label className="block space-y-1 text-sm"><span>{t('projectSettings.name')}</span><Input value={form.displayName} disabled={status === 'saving'} onChange={event => setForm({ ...form, displayName: event.target.value })} /></label>
       <label className="block space-y-1 text-sm"><span>{t('projectSettings.directory')}</span><Input value={form.path} disabled={status === 'saving'} onChange={event => setForm({ ...form, path: event.target.value })} /></label>
       <p className="text-xs text-muted-foreground">{t('projectSettings.directoryHelp')}</p>
-      <label className="block space-y-1 text-sm"><span>{t('projectSettings.credential')}</span><select className="w-full rounded-md border border-input bg-background px-3 py-2" value={form.credentialId} disabled={status !== 'ready'} onChange={event => setForm({ ...form, credentialId: event.target.value })}>
+      <label className="block space-y-1 text-sm"><span>{t('projectSettings.credential')}</span><select className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 focus:bg-card focus:border-ring/40" value={form.credentialId} disabled={status !== 'ready'} onChange={event => setForm({ ...form, credentialId: event.target.value })}>
         <option value="">{t('projectSettings.none')}</option>
         {tokens.map(token => <option key={token.id} value={token.id} disabled={!token.is_active}>{token.credential_name}</option>)}
         {form.credentialId && !tokens.some(token => String(token.id) === form.credentialId) && <option value={form.credentialId} disabled>{t('projectSettings.unavailable')}</option>}

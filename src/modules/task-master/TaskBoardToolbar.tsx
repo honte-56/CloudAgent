@@ -100,7 +100,7 @@ export default function TaskBoardToolbar({
             value={searchTerm}
             onChange={(event) => onSearchTermChange(event.target.value)}
             placeholder={t('search.placeholder')}
-            className="w-full rounded-lg border border-border bg-card py-2 pl-10 pr-4 text-foreground"
+            className="w-full rounded-xl border border-transparent bg-input/70 py-2 pl-10 pr-4 text-foreground focus:bg-card focus:border-ring/40"
           />
         </div>
 

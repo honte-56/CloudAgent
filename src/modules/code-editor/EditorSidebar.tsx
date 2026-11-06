@@ -123,17 +123,18 @@ export default function EditorSidebar({
         <div
           ref={resizeHandleRef}
           onMouseDown={onResizeStart}
-          className="group relative w-1 flex-shrink-0 cursor-col-resize bg-accent transition-colors hover:bg-primary"
+          className="group relative w-2 flex-shrink-0 cursor-col-resize"
           title="Drag to resize"
         >
-          <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-primary opacity-0 transition-opacity group-hover:opacity-100" />
+          {/* A pill-shaped grip, like the sidebar's, that warms to the accent on hover. */}
+          <div className="absolute inset-y-6 left-1/2 w-1 -translate-x-1/2 rounded-full bg-border transition-colors group-hover:bg-primary/60" />
         </div>
       )}
 
       <div
         className={isFloating
           ? 'contents'
-          : `h-full overflow-hidden border-l border-border ${useFlexLayout ? 'min-w-0 flex-1' : ''}`}
+          : `h-full overflow-hidden border-l border-border/60 ${useFlexLayout ? 'min-w-0 flex-1' : ''}`}
         style={isFloating || useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
         <CodeEditor

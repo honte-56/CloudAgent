@@ -104,7 +104,7 @@ export default function CompareView({
           value={base}
           disabled={!hasBases}
           onChange={(event) => handleBaseChange(event.target.value)}
-          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
+          className="min-w-0 flex-1 rounded-xl border border-transparent bg-input/70 px-2 py-1 text-sm text-foreground focus:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50 focus:bg-card focus:border-ring/40"
         >
           {!hasBases && <option value="">{t('git:compare.noBranches')}</option>}
           {localBranches.length > 0 && (

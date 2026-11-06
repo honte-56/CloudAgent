@@ -48,7 +48,7 @@ export default function TaskFiltersPanel({
           <select
             value={statusFilter}
             onChange={(event) => onStatusFilterChange(event.target.value)}
-            className="w-full rounded-md border border-border bg-card px-3 py-2"
+            className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 focus:bg-card focus:border-ring/40"
           >
             <option value="all">{t('filters.allStatuses')}</option>
             {statuses.map((status) => (
@@ -64,7 +64,7 @@ export default function TaskFiltersPanel({
           <select
             value={priorityFilter}
             onChange={(event) => onPriorityFilterChange(event.target.value)}
-            className="w-full rounded-md border border-border bg-card px-3 py-2"
+            className="w-full rounded-xl border border-transparent bg-input/70 px-3 py-2 focus:bg-card focus:border-ring/40"
           >
             <option value="all">{t('filters.allPriorities')}</option>
             {priorities.map((priority) => (

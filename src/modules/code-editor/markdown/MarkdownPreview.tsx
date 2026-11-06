@@ -17,7 +17,7 @@ const markdownPreviewComponents: Components = {
   // second Typography-styled <pre> shell from framing it.
   pre: ({ children }) => <>{children}</>,
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-4 border-border pl-4 italic text-muted-foreground">
+    <blockquote className="squircle my-2 rounded-2xl border-l-[3px] border-primary/60 bg-muted/50 py-2 pl-4 pr-3 text-muted-foreground">
       {children}
     </blockquote>
   ),

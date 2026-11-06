@@ -1,3 +1,5 @@
+> Legacy upstream package shim. This directory is retained for reference; CloudAgent is maintained at https://github.com/honte-56/CloudAgent and does not publish this package.
+
 <div align="center">
 
 > ## This package has moved to [`@cloudcli-ai/cloudcli`](https://www.npmjs.com/package/@cloudcli-ai/cloudcli)

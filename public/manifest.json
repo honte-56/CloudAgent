@@ -1,7 +1,7 @@
 {
-  "name": "CloudCLI UI",
-  "short_name": "CloudCLI UI",
-  "description": "CloudCLI UI web application",
+  "name": "CloudAgent",
+  "short_name": "CloudAgent",
+  "description": "CloudAgent web application",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

@@ -424,7 +424,7 @@
       "versionUnavailable": "Impossible de lire la version",
       "updateAvailable": "Mise à jour disponible : v{{version}}",
       "upToDate": "À jour",
-      "bundled": "Fournie avec CloudCLI et mise à jour en même temps que lui.",
+      "bundled": "Fournie avec CloudAgent et mise à jour en même temps que lui.",
       "platform": "Gérée par la plateforme d'hébergement.",
       "updateTo": "Mettre à jour vers v{{version}}",
       "runUpdater": "Lancer la mise à jour",
@@ -637,7 +637,7 @@
     "prismCloudCLI": {
       "name": "PRISM CloudCLI",
       "badge": "non officiel",
-      "description": "Intelligence de session pour Claude Code, dans CloudCLI. Voyez pourquoi vos sessions consomment des tokens sans quitter le navigateur.",
+      "description": "Intelligence de session pour Claude Code, dans CloudAgent. Voyez pourquoi vos sessions consomment des tokens sans quitter le navigateur.",
       "install": "Installer"
     },
     "sessionManagerPlugin": {

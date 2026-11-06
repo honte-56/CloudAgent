@@ -169,7 +169,7 @@ async function withAppServer<T>(
     // Explicitly defer inherited goal continuation: creating a conversation
     // branch must not start another worker before the user sends a message.
     await call('initialize', {
-      clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1' },
+      clientInfo: { name: 'cloudcli', title: 'CloudAgent', version: '1' },
       capabilities: { experimentalApi: true },
     });
     child.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} })}\n`);

@@ -208,7 +208,7 @@ test('enabled: each lifecycle event becomes one minimal, versioned event carryin
       for (const hit of receiver.hits) {
         assert.equal(hit.url, '/hook?token=abc');
         assert.equal(hit.headers['content-type'], 'application/json');
-        assert.equal(hit.headers['user-agent'], 'CloudCLI-Webhooks/1');
+        assert.equal(hit.headers['user-agent'], 'CloudAgent-Webhooks/1');
         assert.equal(hit.headers['webhook-id'], JSON.parse(hit.body).id);
         assert.match(String(hit.headers['webhook-timestamp']), /^\d{10}$/);
         // No secret configured: no signature header.

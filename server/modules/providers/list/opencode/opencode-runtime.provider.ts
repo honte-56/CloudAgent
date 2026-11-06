@@ -114,8 +114,8 @@ const SERVER_START_TIMEOUT_MS = 60_000;
 const EVENT_STREAM_CONNECT_TIMEOUT_MS = SERVER_START_TIMEOUT_MS;
 
 /**
- * Names, in each turn server's environment, the CloudCLI process that started
- * it, so a later CloudCLI can tell the servers of a process that died without
+ * Names, in each turn server's environment, the CloudAgent process that started
+ * it, so a later CloudAgent can tell the servers of a process that died without
  * stopping them.
  */
 const OWNER_PID_ENV = 'CLOUDCLI_OPENCODE_OWNER_PID';
@@ -503,7 +503,7 @@ function readOpenCodeTokenUsage(sessionId: string | null) {
 let exitHookInstalled = false;
 
 /**
- * Stops the servers of turns still running when CloudCLI exits. The shutdown
+ * Stops the servers of turns still running when CloudAgent exits. The shutdown
  * handlers end with `process.exit`, which runs this synchronously; the SDK
  * signals its child at once (a process-tree kill on Windows).
  */
@@ -552,15 +552,15 @@ const isProcessAlive = (pid: number): boolean => {
 };
 
 /**
- * Stops turn servers that a CloudCLI process started and never stopped because
+ * Stops turn servers that a CloudAgent process started and never stopped because
  * it was killed (SIGKILL, the OOM killer) before its exit hook could run. Such a
  * server never exits by itself, unlike the `opencode run` process it replaces.
  *
- * A process is only stopped when its environment names a CloudCLI owner that
+ * A process is only stopped when its environment names a CloudAgent owner that
  * is gone and its arguments are a turn server's (`serve --hostname=127.0.0.1
  * --port=…`), so commands the agent left running in the background are never
  * touched. The owner pid only means something inside the PID namespace that
- * issued it: a CloudCLI on the host also sees a container's processes in
+ * issued it: a CloudAgent on the host also sees a container's processes in
  * /proc, and their owner pid would look dead from out here, so processes of
  * another (or an unreadable) namespace are skipped. Linux only: the
  * environment is read from /proc, which tests point at a fake tree.
@@ -786,13 +786,13 @@ async function assertSupportedOpenCode(client: OpencodeClient): Promise<void> {
   } catch (error) {
     // `/global/health` itself only exists from 1.0.224 on.
     throw new Error(
-      `CloudCLI needs OpenCode ${MIN_OPENCODE_VERSION} or newer, and this OpenCode did not report its version `
+      `CloudAgent needs OpenCode ${MIN_OPENCODE_VERSION} or newer, and this OpenCode did not report its version `
       + `(${readErrorMessage(error)}). ${upgradeHint}`,
     );
   }
 
   if (version && !isSupportedOpenCodeVersion(version, MIN_OPENCODE_VERSION)) {
-    throw new Error(`OpenCode ${version} is too old for CloudCLI, which needs ${MIN_OPENCODE_VERSION} or newer. ${upgradeHint}`);
+    throw new Error(`OpenCode ${version} is too old for CloudAgent, which needs ${MIN_OPENCODE_VERSION} or newer. ${upgradeHint}`);
   }
 }
 

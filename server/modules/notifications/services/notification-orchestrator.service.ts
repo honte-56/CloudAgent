@@ -191,7 +191,7 @@ export function buildNotificationPayload(event: Partial<RunNotificationEvent> & 
   const message = CODE_MAP[normalizedEvent.code] || 'You have a new notification';
 
   return {
-    title: sessionName || 'CloudCLI',
+    title: sessionName || 'CloudAgent',
     body: `${providerLabel}: ${message}`,
     data: {
       sessionId: normalizedEvent.sessionId || null,

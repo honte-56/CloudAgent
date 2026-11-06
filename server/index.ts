@@ -366,20 +366,20 @@ async function startServer() {
 
             console.log('');
             console.log(terminalTextStyles.dim('═'.repeat(63)));
-            console.log(`  ${terminalTextStyles.bright('CloudCLI Server - Ready')}`);
+            console.log(`  ${terminalTextStyles.bright('CloudAgent Server - Ready')}`);
             console.log(terminalTextStyles.dim('═'.repeat(63)));
             console.log('');
             console.log(`${terminalTextStyles.info('[INFO]')} Server URL:  ${terminalTextStyles.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
             console.log(`${terminalTextStyles.info('[INFO]')} Installed at: ${terminalTextStyles.dim(appInstallPath)}`);
-            console.log(`${terminalTextStyles.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
+            console.log(`${terminalTextStyles.tip('[TIP]')}  Run "cloudagent status" for full configuration details`);
             console.log('');
 
-            // OpenCode turn servers a killed CloudCLI process left behind keep
+            // OpenCode turn servers a killed CloudAgent process left behind keep
             // running until stopped; this is the first chance to do so.
             void reapOrphanedOpenCodeServers()
                 .then((count) => {
                     if (count > 0) {
-                        console.log(`${terminalTextStyles.info('[INFO]')} Stopped ${count} OpenCode server(s) left running by an earlier CloudCLI process`);
+                        console.log(`${terminalTextStyles.info('[INFO]')} Stopped ${count} OpenCode server(s) left running by an earlier CloudAgent process`);
                     }
                 })
                 .catch((error) => {

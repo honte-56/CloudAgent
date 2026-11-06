@@ -463,7 +463,7 @@
       "versionUnavailable": "לא ניתן לקרוא את הגרסה",
       "updateAvailable": "עדכון זמין: v{{version}}",
       "upToDate": "מעודכנת",
-      "bundled": "מגיעה עם CloudCLI ומתעדכנת יחד איתו.",
+      "bundled": "מגיעה עם CloudAgent ומתעדכנת יחד איתו.",
       "platform": "מנוהלת על ידי פלטפורמת האירוח.",
       "updateTo": "עדכון ל-v{{version}}",
       "runUpdater": "הפעלת העדכון",
@@ -621,7 +621,7 @@
     },
     "managed": {
       "badge": "מנוהל",
-      "hint": "מנוהל על ידי CloudCLI."
+      "hint": "מנוהל על ידי CloudAgent."
     },
     "help": {
       "title": "על Codex MCP",
@@ -678,7 +678,7 @@
     "prismCloudCLI": {
       "name": "PRISM CloudCLI",
       "badge": "לא רשמי",
-      "description": "ניתוח סשנים של Claude Code בתוך CloudCLI. אפשר לראות למה הסשנים צורכים טוקנים בלי לצאת מהדפדפן.",
+      "description": "ניתוח סשנים של Claude Code בתוך CloudAgent. אפשר לראות למה הסשנים צורכים טוקנים בלי לצאת מהדפדפן.",
       "install": "התקנה"
     },
     "sessionManagerPlugin": {

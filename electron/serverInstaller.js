@@ -7,14 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * Installs the versioned local server runtime used by CloudCLI Desktop.
+ * Installs the versioned local server runtime used by CloudAgent Desktop.
  *
  * Server bundles are cached under:
  *   ~/.cloudcli/server/<version>/dist-server/server/index.js
  */
 
 const DEFAULT_INSTALL_ROOT = path.join(os.homedir(), '.cloudcli', 'server');
-const DEFAULT_BUNDLE_BASE_URL = 'https://github.com/siteboon/claudecodeui/releases/download';
+const DEFAULT_BUNDLE_BASE_URL = 'https://github.com/honte-56/CloudAgent/releases/download';
 const MAX_REDIRECTS = 5;
 const LOCAL_DOWNLOAD_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -59,7 +59,7 @@ export class ServerInstaller {
   }
 
   getBundleName() {
-    return `cloudcli-local-server-${this.version}-${this.platform}-${this.arch}.tar.gz`;
+    return `cloudagent-local-server-${this.version}-${this.platform}-${this.arch}.tar.gz`;
   }
 
   getBundleUrl() {

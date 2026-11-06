@@ -31,7 +31,7 @@ export const WEBHOOK_CHANNEL = 'webhook';
 const WEBHOOK_ENDPOINT_ID = 'default';
 const WEBHOOK_PAYLOAD_VERSION = 1;
 const WEBHOOK_SECRET_PREFIX = 'whsec_';
-const WEBHOOK_USER_AGENT = 'CloudCLI-Webhooks/1';
+const WEBHOOK_USER_AGENT = 'CloudAgent-Webhooks/1';
 const MAX_WEBHOOK_URL_LENGTH = 2048;
 // Response bodies are never read for content; this much is drained before the
 // connection is dropped.

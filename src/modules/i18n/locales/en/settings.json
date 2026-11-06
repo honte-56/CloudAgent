@@ -468,7 +468,7 @@
       "versionUnavailable": "Could not read the version",
       "updateAvailable": "Update available: v{{version}}",
       "upToDate": "Up to date",
-      "bundled": "Ships with CloudCLI and is updated together with it.",
+      "bundled": "Ships with CloudAgent and is updated together with it.",
       "platform": "Managed by the hosting platform.",
       "updateTo": "Update to v{{version}}",
       "runUpdater": "Run updater",
@@ -641,7 +641,7 @@
     },
     "managed": {
       "badge": "Managed",
-      "hint": "Managed by CloudCLI."
+      "hint": "Managed by CloudAgent."
     },
     "help": {
       "title": "About Codex MCP",
@@ -698,7 +698,7 @@
     "prismCloudCLI": {
       "name": "PRISM CloudCLI",
       "badge": "unofficial",
-      "description": "Session intelligence for Claude Code, inside CloudCLI. See why your sessions are burning tokens without leaving the browser.",
+      "description": "Session intelligence for Claude Code, inside CloudAgent. See why your sessions are burning tokens without leaving the browser.",
       "install": "Install"
     },
     "sessionManagerPlugin": {

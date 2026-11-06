@@ -53,7 +53,7 @@ export class CodexLiveClient {
         } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); return; }
         const result = message.method.endsWith('/requestApproval') ? { decision: 'decline' } : null;
         this.write(result ? { id: message.id, result } : {
-          id: message.id, error: { code: -32601, message: 'CloudCLI does not support this interactive request.' },
+          id: message.id, error: { code: -32601, message: 'CloudAgent does not support this interactive request.' },
         });
       } else if (message.id !== undefined) {
         const pending = this.pending.get(message.id);
@@ -75,7 +75,7 @@ export class CodexLiveClient {
   }
 
   async initialize(): Promise<void> {
-    await this.call('initialize', { clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1.37.4' }, capabilities: { experimentalApi: true } });
+    await this.call('initialize', { clientInfo: { name: 'cloudcli', title: 'CloudAgent', version: '1.37.4' }, capabilities: { experimentalApi: true } });
     this.write({ method: 'initialized', params: {} });
   }
 

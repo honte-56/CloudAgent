@@ -417,7 +417,7 @@
       "versionUnavailable": "Sürüm okunamadı",
       "updateAvailable": "Güncelleme var: v{{version}}",
       "upToDate": "Güncel",
-      "bundled": "CloudCLI ile birlikte gelir ve onunla birlikte güncellenir.",
+      "bundled": "CloudAgent ile birlikte gelir ve onunla birlikte güncellenir.",
       "platform": "Barındırma platformu tarafından yönetilir.",
       "updateTo": "v{{version}} sürümüne güncelle",
       "runUpdater": "Güncelleyiciyi çalıştır",

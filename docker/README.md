@@ -1,3 +1,5 @@
+> These are upstream CloudCLI sandbox templates. They install `@cloudcli-ai/cloudcli`, not this CloudAgent fork. To run CloudAgent, follow the source installation in the [project README](../README.md).
+
 <!-- Docker Hub short description (100 chars max): -->
 <!-- Sandbox templates for running AI coding agents with a web & mobile IDE (Claude Code, Codex) -->
 

@@ -194,7 +194,7 @@ export const playChatCompletionSound = (options = {}): Promise<void> => playNoti
 //----------------- DOCUMENT TITLE ------------
 
 /** Browser tab title shown when no project or session is selected. Private to the title helpers. */
-const DEFAULT_PAGE_TITLE = 'CloudCLI UI';
+const DEFAULT_PAGE_TITLE = 'CloudAgent';
 
 /**
  * Resolves the human-readable label for a session: the persisted `summary` (the custom
@@ -256,7 +256,7 @@ export const getQuickSettingsTabPanelId = (tab: QuickSettingsTab): string => `qu
 // Exact old wire prefix, frozen to match stored CLI transcripts. New runs use a tagged envelope.
 const LEGACY_GITHUB_AUTH_INSTRUCTIONS = 'This project has GitHub authentication configured for git over HTTPS and gh. Use git and gh directly; do not log in, read, print, or copy credentials. GitHub SSH remotes are mapped to HTTPS for this run. Commit and push only as requested by the user. Git author identity comes from the existing Git configuration.';
 
-/** Removes only a leading CloudCLI runtime-context envelope or its exact legacy
+/** Removes only a leading CloudAgent runtime-context envelope or its exact legacy
  * GitHub paragraph. Quoted/embedded instructions and the user's remaining text
  * are preserved. The caller marks cleaned rows to avoid stripping twice. */
 export function stripRuntimeInstructions(text: string): string {

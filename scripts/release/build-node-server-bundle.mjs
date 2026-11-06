@@ -18,7 +18,7 @@ if (process.platform !== 'linux' || process.arch !== 'x64' || process.versions.n
 
 const output = path.join(root, 'release/node-server');
 const stage = path.join(output, 'stage');
-const filename = `cloudcli-server-${manifest.version}-linux-x64.tar.gz`;
+const filename = `cloudagent-server-${manifest.version}-linux-x64.tar.gz`;
 await fs.rm(stage, { recursive: true, force: true });
 await fs.mkdir(stage, { recursive: true });
 

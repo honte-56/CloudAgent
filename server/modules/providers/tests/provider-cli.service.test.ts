@@ -222,7 +222,7 @@ test('each provider reports the version its CLI prints for --version', async () 
     assert.equal(openCodeStatus.installed, true);
     assert.equal(openCodeStatus.installedVersion, '1.18.25');
 
-    // Codex chats run the @openai/codex build CloudCLI depends on, not a `codex` on PATH.
+    // Codex chats run the @openai/codex build CloudAgent depends on, not a `codex` on PATH.
     const bundledCodex = createRequire(import.meta.url)('@openai/codex/package.json') as { version: string };
     const codexStatus = await new CodexProviderAuth().getStatus();
     assert.equal(codexStatus.installed, true);
@@ -428,7 +428,7 @@ test('getCliStatus does not ask the registry about a CLI that is not installed',
   });
 });
 
-test('Cursor has no npm release to compare with; Codex ships with CloudCLI; platform mode offers no update', async () => {
+test('Cursor has no npm release to compare with; Codex ships with CloudAgent; platform mode offers no update', async () => {
   await withIsolatedCliEnv(async (binDir) => {
     const cursor = await createFakeCli(binDir, 'cursor-agent');
     await cursor.set('version', '2026.07.20-8cc9c0b\n');

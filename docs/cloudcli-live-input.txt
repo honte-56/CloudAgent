@@ -1,4 +1,4 @@
-CloudCLI Codex live input fix — 2026-10-10
+CloudAgent Codex live input fix — 2026-10-10
 
 Source: /srv/codex-workspaces/cloudcli (upstream v1.37.3).
 Release and backup: /home/codexweb/.local/lib/cloudcli-fixes/live-input-20261010.

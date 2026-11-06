@@ -462,7 +462,7 @@
       "versionUnavailable": "Não foi possível ler a versão",
       "updateAvailable": "Atualização disponível: v{{version}}",
       "upToDate": "Atualizada",
-      "bundled": "Vem com o CloudCLI e é atualizada junto com ele.",
+      "bundled": "Vem com o CloudAgent e é atualizada junto com ele.",
       "platform": "Gerenciada pela plataforma de hospedagem.",
       "updateTo": "Atualizar para v{{version}}",
       "runUpdater": "Executar atualizador",
@@ -635,7 +635,7 @@
     },
     "managed": {
       "badge": "Gerenciado",
-      "hint": "Gerenciado pelo CloudCLI."
+      "hint": "Gerenciado pelo CloudAgent."
     },
     "help": {
       "title": "Sobre MCP do Codex",
@@ -692,7 +692,7 @@
     "prismCloudCLI": {
       "name": "PRISM CloudCLI",
       "badge": "não oficial",
-      "description": "Inteligência de sessão para o Claude Code, dentro do CloudCLI. Veja por que suas sessões estão queimando tokens sem sair do navegador.",
+      "description": "Inteligência de sessão para o Claude Code, dentro do CloudAgent. Veja por que suas sessões estão queimando tokens sem sair do navegador.",
       "install": "Instalar"
     },
     "sessionManagerPlugin": {

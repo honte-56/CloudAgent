@@ -74,12 +74,12 @@ export function createCliApplication(): CliApplication {
       // before this best-effort npm registry check runs.
       await new Promise<void>((resolve) => setImmediate(resolve));
       return execSync(
-        'npm show @cloudcli-ai/cloudcli version',
+        'npm show @honte-56/cloudagent version',
         { encoding: 'utf8' },
       ).trim();
     },
     updateGlobalPackage: () => {
-      execSync('npm update -g @cloudcli-ai/cloudcli', { stdio: 'inherit' });
+      execSync('npm update -g @honte-56/cloudagent', { stdio: 'inherit' });
     },
     startServer: async () => {
       // The server executable is an entrypoint rather than a feature module,

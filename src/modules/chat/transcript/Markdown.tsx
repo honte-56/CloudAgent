@@ -308,7 +308,7 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
           return (
             <a
               href={href || fileRef}
-              className="cursor-pointer text-blue-600 hover:underline dark:text-blue-400"
+              className="cursor-pointer text-primary hover:underline"
               onClick={(event) => {
                 event.preventDefault();
                 // Normalized once for every branch below: the href arrives
@@ -331,7 +331,7 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
         return (
           <a
             href={href}
-            className="text-blue-600 hover:underline dark:text-blue-400"
+            className="text-primary hover:underline"
             target="_blank"
             rel="noopener noreferrer"
           >

@@ -173,7 +173,7 @@ export default function MergeWorktreeModal({
             <button
               onClick={() => void handleMerge()}
               disabled={isMerging || !message.trim()}
-              className="flex items-center space-x-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="press flex items-center space-x-2 rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isMerging ? (
                 <>

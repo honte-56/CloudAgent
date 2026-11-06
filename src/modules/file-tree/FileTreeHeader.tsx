@@ -54,10 +54,10 @@ export default function FileTreeHeader({
   };
 
   return (
-    <div className="space-y-2 border-b border-border px-3 pb-2 pt-3">
+    <div className="space-y-2 px-3 pb-2 pt-3">
       {/* Title and Toolbar */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-foreground">{t('fileTree.files')}</h3>
+        <h3 className="pl-1 text-sm font-semibold text-foreground">{t('fileTree.files')}</h3>
         <div className="flex items-center gap-0.5">
           {/* Action buttons */}
           {onUploadFiles && (
@@ -193,19 +193,19 @@ export default function FileTreeHeader({
 
       {/* Search Bar */}
       <div className="relative">
-        <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           type="text"
           placeholder={t('fileTree.searchPlaceholder')}
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
-          className="h-8 pl-8 pr-8 text-sm"
+          className="h-9 rounded-full pl-9 pr-9 text-sm"
         />
         {searchQuery && (
           <Button
             variant="ghost"
             size="sm"
-            className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2 p-0 hover:bg-accent"
+            className="absolute right-1.5 top-1/2 h-6 w-6 -translate-y-1/2 p-0"
             onClick={() => onSearchQueryChange('')}
             title={t('fileTree.clearSearch')}
             aria-label={t('fileTree.clearSearch')}

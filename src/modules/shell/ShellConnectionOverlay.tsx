@@ -24,7 +24,7 @@ export default function ShellConnectionOverlay({
     return (
       <div className="absolute inset-0 z-20 flex items-center justify-center bg-card/90">
         <div className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-300" aria-hidden="true" />
+          <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
           <span>{loadingLabel}</span>
         </div>
       </div>

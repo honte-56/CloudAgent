@@ -56,8 +56,8 @@ const getIndicatorConfig = (status: TaskIndicatorStatus): IndicatorConfig => {
   if (status === 'taskmaster-only') {
     return {
       icon: Settings,
-      colorClassName: 'text-blue-500 dark:text-blue-400',
-      backgroundClassName: 'bg-blue-50 dark:bg-blue-950',
+      colorClassName: 'text-primary',
+      backgroundClassName: 'bg-primary/10',
       label: 'TaskMaster Init',
       title: 'TaskMaster initialized, MCP server needs setup',
     };
@@ -75,8 +75,8 @@ const getIndicatorConfig = (status: TaskIndicatorStatus): IndicatorConfig => {
 
   return {
     icon: X,
-    colorClassName: 'text-gray-400 dark:text-gray-500',
-    backgroundClassName: 'bg-gray-50 dark:bg-gray-900',
+    colorClassName: 'text-muted-foreground/70',
+    backgroundClassName: 'bg-muted',
     label: 'No TaskMaster',
     title: 'TaskMaster not configured',
   };

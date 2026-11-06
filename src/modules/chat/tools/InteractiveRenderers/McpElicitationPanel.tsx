@@ -236,7 +236,7 @@ const isOpenableUrl = (url: string | undefined): boolean => {
   }
 };
 
-const inputClassName = 'w-full rounded-lg border-0 bg-gray-50 px-3 py-1.5 text-[13px] text-gray-900 outline-none ring-1 ring-gray-200 transition-shadow duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-400 dark:bg-gray-900/60 dark:text-gray-100 dark:ring-gray-700 dark:placeholder:text-gray-600 dark:focus:ring-blue-500';
+const inputClassName = 'w-full rounded-lg border-0 bg-muted px-3 py-1.5 text-[13px] text-foreground outline-none ring-1 ring-border transition-shadow duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-ring dark:placeholder:text-gray-600';
 
 /**
  * Registered by chat's PermissionRequestsBanner as the permission panel for
@@ -374,7 +374,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
 
   return (
     <div className="w-full" data-testid="mcp-elicitation-panel">
-      <div className="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-lg dark:border-gray-700/50 dark:bg-gray-800/90 dark:shadow-2xl">
+      <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-card shadow-lg dark:shadow-2xl">
         <div className="absolute left-0 right-0 top-0 h-[2px] bg-gradient-to-r from-blue-500 via-cyan-400 to-teal-400" />
 
         <form onSubmit={handleSubmit} noValidate className="flex max-h-[70dvh] flex-col">
@@ -382,24 +382,24 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
           <div ref={scrollAreaRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
             <div className="px-4 pb-2 pt-3.5">
               <div className="mb-1.5 flex items-center gap-2">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
                   {t('chat:mcpElicitation.asks', { server: serverLabel, defaultValue: '{{server}} asks for your input' })}
                 </span>
               </div>
               {input.title && (
-                <p className="text-[12px] font-semibold text-gray-700 dark:text-gray-300">{input.title}</p>
+                <p className="text-[12px] font-semibold text-foreground/80">{input.title}</p>
               )}
-              <p className="whitespace-pre-wrap text-[14px] font-medium leading-snug text-gray-900 dark:text-gray-100">
+              <p className="whitespace-pre-wrap text-[14px] font-medium leading-snug text-foreground">
                 {input.message}
               </p>
               {input.description && (
-                <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">{input.description}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{input.description}</p>
               )}
             </div>
 
             {isUrlMode ? (
               <div className="px-4 pb-2">
-                <code className="block break-all rounded bg-gray-100 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/60 dark:text-gray-300">{input.url}</code>
+                <code className="block break-all rounded bg-muted px-2 py-1 text-xs text-foreground/80">{input.url}</code>
                 {!canOpenUrl && (
                   <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
                     {t('chat:mcpElicitation.unsafeUrl', { defaultValue: 'Only http and https links can be opened from here.' })}
@@ -417,7 +417,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
                     <span>
                       {field.label}
                       {!field.required && field.kind !== 'boolean' && (
-                        <span className="ml-1 font-normal text-gray-400 dark:text-gray-500">
+                        <span className="ml-1 font-normal text-muted-foreground/70">
                           ({t('chat:mcpElicitation.optional', { defaultValue: 'optional' })})
                         </span>
                       )}
@@ -427,7 +427,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
                   if (field.kind === 'boolean') {
                     return (
                       <div key={field.key}>
-                        <label htmlFor={id} className="flex items-center gap-2 text-[13px] font-medium text-gray-800 dark:text-gray-200">
+                        <label htmlFor={id} className="flex items-center gap-2 text-[13px] font-medium text-foreground">
                           <input
                             id={id}
                             type="checkbox"
@@ -436,7 +436,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
                           />
                           {labelText}
                         </label>
-                        {field.description && <p className="ml-6 text-[11px] text-gray-500 dark:text-gray-400">{field.description}</p>}
+                        {field.description && <p className="ml-6 text-[11px] text-muted-foreground">{field.description}</p>}
                       </div>
                     );
                   }
@@ -445,11 +445,11 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
                     const picked = Array.isArray(value) ? value : [];
                     return (
                       <fieldset key={field.key}>
-                        <legend className="text-[13px] font-medium text-gray-800 dark:text-gray-200">{labelText}</legend>
-                        {field.description && <p className="text-[11px] text-gray-500 dark:text-gray-400">{field.description}</p>}
+                        <legend className="text-[13px] font-medium text-foreground">{labelText}</legend>
+                        {field.description && <p className="text-[11px] text-muted-foreground">{field.description}</p>}
                         <div className="mt-1 space-y-1">
                           {field.choices.map((choice) => (
-                            <label key={choice.value} className="flex items-center gap-2 text-[13px] text-gray-700 dark:text-gray-300">
+                            <label key={choice.value} className="flex items-center gap-2 text-[13px] text-foreground/80">
                               <input
                                 type="checkbox"
                                 checked={picked.includes(choice.value)}
@@ -471,8 +471,8 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
 
                   return (
                     <div key={field.key}>
-                      <label htmlFor={id} className="block text-[13px] font-medium text-gray-800 dark:text-gray-200">{labelText}</label>
-                      {field.description && <p className="text-[11px] text-gray-500 dark:text-gray-400">{field.description}</p>}
+                      <label htmlFor={id} className="block text-[13px] font-medium text-foreground">{labelText}</label>
+                      {field.description && <p className="text-[11px] text-muted-foreground">{field.description}</p>}
                       <div className="mt-1">
                         {field.kind === 'choice' ? (
                           <select
@@ -505,11 +505,11 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
             )}
           </div>
 
-          <div className="flex shrink-0 items-center justify-end gap-1.5 border-t border-gray-100 bg-gray-50/50 px-4 py-2 dark:border-gray-700/50 dark:bg-gray-800/50">
+          <div className="flex shrink-0 items-center justify-end gap-1.5 border-t border-border bg-muted/50 px-4 py-2">
             <button
               type="button"
               onClick={handleDecline}
-              className="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-all duration-150 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/60"
+              className="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-all duration-150 hover:bg-muted"
             >
               {t('chat:mcpElicitation.decline', { defaultValue: 'Decline' })}
             </button>
@@ -520,7 +520,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={handleOpenUrl}
-                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-medium text-white transition-all duration-150 hover:bg-blue-700"
+                  className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90"
                 >
                   {t('chat:mcpElicitation.openLink', { defaultValue: 'Open link' })}
                 </a>
@@ -528,7 +528,7 @@ export const McpElicitationPanel: React.FC<PermissionPanelProps> = ({ request, o
             ) : (
               <button
                 type="submit"
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-medium text-white transition-all duration-150 hover:bg-blue-700"
+                className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90"
               >
                 {t('chat:mcpElicitation.submit', { defaultValue: 'Submit' })}
               </button>

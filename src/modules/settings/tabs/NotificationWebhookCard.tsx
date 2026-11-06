@@ -71,7 +71,7 @@ export default function NotificationWebhookCard() {
     <div className="space-y-4 rounded-lg border border-border bg-card p-4" data-testid="notification-webhook-card">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <Webhook className="h-4 w-4 text-blue-600" />
+          <Webhook className="h-4 w-4 text-primary" />
           <h4 className="font-medium text-foreground">{t('notifications.webhook.title')}</h4>
         </div>
         <p className="text-sm text-muted-foreground">{t('notifications.webhook.description')}</p>

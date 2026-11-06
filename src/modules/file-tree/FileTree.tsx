@@ -195,9 +195,9 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
 
       {/* Drag overlay; pointer-events-none keeps folder rows reachable as drop targets */}
       {upload.isDragOver && (
-        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center border-2 border-dashed border-blue-500 bg-blue-500/10">
-          <div className="flex items-center gap-3 rounded-lg bg-background/95 px-6 py-4 shadow-lg">
-            <Upload className="h-6 w-6 text-blue-500" />
+        <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-primary/60 bg-primary/10">
+          <div className="animate-in zoom-in-95 flex items-center gap-3 rounded-2xl bg-card px-6 py-4 shadow-floating">
+            <Upload className="h-6 w-6 text-primary" />
             <span className="text-sm font-medium">
               {upload.dropTarget
                 ? t('fileTree.dropToUploadTo', 'Drop files to upload to "{{folder}}"', {
@@ -237,7 +237,7 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
             style={{ paddingLeft: `${(operations.newItemParent.split('/').length - 1) * 16 + 4}px` }}
           >
             {operations.newItemType === 'directory' ? (
-              <Folder className={cn(ICON_SIZE_CLASS, 'text-blue-500')} />
+              <Folder className={cn(ICON_SIZE_CLASS, 'text-primary')} />
             ) : (
               <span className="ml-[18px]">{renderFileIcon(operations.newItemName)}</span>
             )}
@@ -304,7 +304,7 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
       {/* Delete Confirmation Dialog */}
       {operations.deleteConfirmation.isOpen && operations.deleteConfirmation.item && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
-          <div className="mx-4 max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg">
+          <div className="squircle animate-in zoom-in-95 mx-4 max-w-sm rounded-3xl border border-border/50 bg-popover p-5 shadow-floating">
             <div className="mb-4 flex items-center gap-3">
               <div className="rounded-full bg-red-100 p-2 dark:bg-red-900/30">
                 <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
@@ -329,14 +329,14 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
               <button
                 onClick={operations.handleCancelDelete}
                 disabled={operationLoading}
-                className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                className="press rounded-full px-4 py-1.5 text-sm hover:bg-accent"
               >
                 {t('common.cancel', 'Cancel')}
               </button>
               <button
                 onClick={operations.handleConfirmDelete}
                 disabled={operationLoading}
-                className="flex items-center gap-2 rounded-md bg-red-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                className="press flex items-center gap-2 rounded-full bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
               >
                 {operationLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {t('fileTree.delete.confirm', 'Delete')}

@@ -14,8 +14,8 @@ const KANBAN_COLUMN_CONFIG = [
     id: 'in-progress',
     titleKey: 'kanban.inProgress',
     status: 'in-progress',
-    color: 'bg-blue-50 dark:bg-blue-900/50 border-blue-200 dark:border-blue-700',
-    headerColor: 'bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-200',
+    color: 'bg-primary/10 border-primary/30',
+    headerColor: 'bg-primary/10 text-primary',
   },
   {
     id: 'done',
@@ -42,8 +42,8 @@ const KANBAN_COLUMN_CONFIG = [
     id: 'cancelled',
     titleKey: 'kanban.cancelled',
     status: 'cancelled',
-    color: 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-700',
-    headerColor: 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200',
+    color: 'bg-muted border-border',
+    headerColor: 'bg-muted text-foreground',
   },
 ] as const;
 

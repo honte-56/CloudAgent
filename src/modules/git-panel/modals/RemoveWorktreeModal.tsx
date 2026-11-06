@@ -110,7 +110,7 @@ export default function RemoveWorktreeModal({
             <button
               onClick={() => void handleRemove()}
               disabled={isRemoving || (isDirty && !force)}
-              className="flex items-center space-x-2 rounded-lg bg-red-600 px-4 py-2 text-sm text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="press flex items-center space-x-2 rounded-full bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isRemoving ? (
                 <>

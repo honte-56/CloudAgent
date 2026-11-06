@@ -164,13 +164,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     : 'bg-gray-400 dark:bg-gray-500'
               }`}
             />
-            <span className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="text-xs text-muted-foreground">
               {message.content || t('chat:misc.compacted', 'Compacted')}
             </span>
           </div>
           {message.compactSummary && (
             <details className="ml-3.5 mt-0.5">
-              <summary className="cursor-pointer text-xs text-gray-500 hover:text-foreground dark:text-gray-400">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
                 {t('chat:misc.compactionSummary', 'full summary')}
               </summary>
               <div className="mt-1">
@@ -186,7 +186,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
         <div className="w-full">
           <div className="flex items-center gap-2 py-0.5">
             <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${message.taskNotificationStatus === 'completed' ? 'bg-green-400 dark:bg-green-500' : 'bg-amber-400 dark:bg-amber-500'}`} />
-            <span className="text-xs text-gray-500 dark:text-gray-400">{message.content}</span>
+            <span className="text-xs text-muted-foreground">{message.content}</span>
           </div>
         </div>
       ) : (
@@ -328,7 +328,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 </ReasoningContent>
               </Reasoning>
             ) : (
-              <div dir="auto" className="text-sm text-gray-700 dark:text-gray-300">
+              <div dir="auto" className="text-sm text-foreground/80">
                 {/* Reasoning accordion */}
                 {showThinking && message.reasoning && (
                   <Reasoning className="mb-3" defaultOpen={false}>
@@ -399,7 +399,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             )}
 
             {(shouldShowAssistantCopyControl || !isGrouped) && (
-              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-muted-foreground/70">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
                 )}

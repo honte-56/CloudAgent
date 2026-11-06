@@ -41,14 +41,14 @@ export default function TaskFiltersPanel({
   }
 
   return (
-    <div className="space-y-4 rounded-lg bg-gray-50 p-4 dark:bg-gray-800">
+    <div className="space-y-4 rounded-lg bg-muted p-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('filters.status')}</label>
+          <label className="mb-1 block text-sm font-medium text-foreground/80">{t('filters.status')}</label>
           <select
             value={statusFilter}
             onChange={(event) => onStatusFilterChange(event.target.value)}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
+            className="w-full rounded-md border border-border bg-card px-3 py-2"
           >
             <option value="all">{t('filters.allStatuses')}</option>
             {statuses.map((status) => (
@@ -60,11 +60,11 @@ export default function TaskFiltersPanel({
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('filters.priority')}</label>
+          <label className="mb-1 block text-sm font-medium text-foreground/80">{t('filters.priority')}</label>
           <select
             value={priorityFilter}
             onChange={(event) => onPriorityFilterChange(event.target.value)}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
+            className="w-full rounded-md border border-border bg-card px-3 py-2"
           >
             <option value="all">{t('filters.allPriorities')}</option>
             {priorities.map((priority) => (
@@ -76,14 +76,14 @@ export default function TaskFiltersPanel({
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('filters.sortBy')}</label>
+          <label className="mb-1 block text-sm font-medium text-foreground/80">{t('filters.sortBy')}</label>
           <select
             value={`${sortField}-${sortOrder}`}
             onChange={(event) => {
               const [field, order] = event.target.value.split('-') as [TaskBoardSortField, TaskBoardSortOrder];
               onSortConfigChange(field, order);
             }}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800"
+            className="w-full rounded-md border border-border bg-card px-3 py-2"
           >
             <option value="id-asc">{t('sort.idAsc')}</option>
             <option value="id-desc">{t('sort.idDesc')}</option>
@@ -98,10 +98,10 @@ export default function TaskFiltersPanel({
       </div>
 
       <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-600 dark:text-gray-400">
+        <div className="text-sm text-muted-foreground">
           {t('filters.showing', { filtered: filteredTaskCount, total: totalTaskCount })}
         </div>
-        <button onClick={onClearFilters} className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+        <button onClick={onClearFilters} className="text-sm font-medium text-primary hover:text-primary">
           {t('filters.clearFilters')}
         </button>
       </div>

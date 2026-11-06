@@ -43,8 +43,8 @@ const MODE_APPEARANCE: Record<PermissionMode, ModeAppearance> = {
     icon: Bot,
     label: 'Auto Mode',
     trigger:
-      'bg-blue-500/12 text-blue-700 hover:bg-blue-500/18 dark:text-blue-300',
-    item: 'text-blue-700 dark:text-blue-300',
+      'bg-primary/12 text-primary hover:bg-primary/18',
+    item: 'text-primary',
   },
   acceptEdits: {
     icon: Smile,

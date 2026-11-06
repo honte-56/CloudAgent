@@ -185,7 +185,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
   return (
     <div
-      className="modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm md:p-4"
+      className="modal-backdrop animate-fade-in fixed inset-0 z-[9999] flex items-center justify-center bg-[hsl(var(--scrim))] md:p-4"
       onMouseDown={handleBackdropMouseDown}
       onClick={handleBackdropClick}
     >
@@ -194,11 +194,11 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
         role="dialog"
         aria-modal="true"
         aria-label={t('title')}
-        className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[90vh] md:max-w-4xl md:rounded-xl"
+        className="squircle flex h-full w-full flex-col overflow-hidden bg-background shadow-floating max-md:animate-bottom-sheet-content-show md:h-[90vh] md:max-w-4xl md:animate-pop-in md:rounded-4xl md:border md:border-border/40"
       >
         {/* Header */}
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
-          <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+        <div className="pwa-header-safe flex flex-shrink-0 items-center justify-between px-4 py-3 md:px-6 md:py-4">
+          <h2 className="text-lg font-semibold tracking-tight text-foreground">{t('title')}</h2>
           <div className="flex items-center gap-2">
             {saveStatus === 'success' && (
               <span className="animate-in fade-in text-xs text-muted-foreground">{t('saveStatus.success')}</span>
@@ -207,7 +207,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               variant="ghost"
               size="sm"
               onClick={onClose}
-              className="h-10 w-10 touch-manipulation p-0 text-muted-foreground hover:text-foreground active:bg-accent/50"
+              className="h-10 w-10 touch-manipulation rounded-full bg-muted p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <X className="h-5 w-5" />
             </Button>

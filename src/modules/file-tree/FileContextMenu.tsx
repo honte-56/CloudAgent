@@ -283,8 +283,8 @@ export default function FileContextMenu({
           aria-label={t('fileTree.context.menuLabel', 'File context menu')}
           style={{ position: 'fixed', left: menuPosition.x, top: menuPosition.y, zIndex: 9999 }}
           className={cn(
-            'min-w-[180px] py-1 px-1',
-            'bg-popover border border-border rounded-lg shadow-lg',
+            'squircle min-w-[200px] origin-top-left p-1.5',
+            'bg-popover border border-border/50 rounded-2xl shadow-floating',
             'animate-in fade-in-0 zoom-in-95',
             'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
           )}
@@ -304,12 +304,12 @@ export default function FileContextMenu({
                   disabled={isLoading || action.isDisabled}
                   onClick={() => runMenuActionAndClose(action.onSelect)}
                   className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2 text-sm text-left rounded-md transition-colors',
+                    'press-soft w-full flex items-center gap-3 px-3 py-2 text-sm text-left rounded-xl',
                     'focus:outline-none focus:bg-accent',
                     action.isDisabled
                       ? 'opacity-50 cursor-not-allowed'
                       : action.isDanger
-                      ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950'
+                      ? 'text-red-600 dark:text-red-400 hover:bg-red-500/10'
                       : 'hover:bg-accent',
                     isLoading && 'pointer-events-none',
                   )}

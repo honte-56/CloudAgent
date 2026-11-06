@@ -64,7 +64,7 @@ export default function ClaudeSettingsFileRules() {
   return (
     <div className="space-y-4" data-testid="claude-settings-file-rules">
       <div className="flex items-center gap-3">
-        <FileText className="h-5 w-5 text-blue-500" />
+        <FileText className="h-5 w-5 text-primary" />
         <h3 className="text-lg font-medium text-foreground">{t('permissions.settingsFiles.title')}</h3>
       </div>
       <p className="text-sm text-muted-foreground">{t('permissions.settingsFiles.description')}</p>

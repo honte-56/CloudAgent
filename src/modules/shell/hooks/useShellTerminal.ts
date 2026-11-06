@@ -42,11 +42,13 @@ const DARK_TERMINAL_COLORS: TerminalColorOptions = {
   // xterm's default: leave the colours programs ask for untouched.
   minimumContrastRatio: 1,
   // Keep the runtime theme keys used by the previous JSX implementation.
+  // The background is the workspace panel's dark tone (--background), so the
+  // terminal reads as part of the panel rather than a box set into it.
   theme: {
-    background: '#1e1e1e',
+    background: '#16171a',
     foreground: '#d4d4d4',
     cursor: '#ffffff',
-    cursorAccent: '#1e1e1e',
+    cursorAccent: '#16171a',
     selectionBackground: '#264f78',
     selectionForeground: '#ffffff',
     black: '#000000',
@@ -93,12 +95,13 @@ const LIGHT_TERMINAL_COLORS: TerminalColorOptions = {
   minimumContrastRatio: 4.5,
   // Based on GitHub's Primer light palette. The bright variants are darker than
   // Primer's, because xterm draws bold text in them: every colour except the two
-  // whites keeps at least 4.5:1 against the white background.
+  // whites keeps at least 4.5:1 against the near-white panel background.
+  // The background is the workspace panel's light tone (--background).
   theme: {
-    background: '#ffffff',
+    background: '#fafbfc',
     foreground: '#1f2328',
     cursor: '#1f2328',
-    cursorAccent: '#ffffff',
+    cursorAccent: '#fafbfc',
     selectionBackground: '#add6ff',
     selectionForeground: '#1f2328',
     black: '#24292f',
@@ -116,7 +119,7 @@ const LIGHT_TERMINAL_COLORS: TerminalColorOptions = {
     brightBlue: '#0550ae',
     brightMagenta: '#6639ba',
     brightCyan: '#0e6d73',
-    brightWhite: '#8c959f',
+    brightWhite: '#868f99',
   },
 };
 

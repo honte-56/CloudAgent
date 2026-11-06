@@ -219,7 +219,7 @@ export default function WorktreesView({
           <button
             onClick={() => setShowNewWorktreeModal(true)}
             disabled={!worktreeData}
-            className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+            className="press flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             {t('git:worktrees.newWorktree')}
@@ -268,7 +268,7 @@ export default function WorktreesView({
             <button
               onClick={() => setShowNewWorktreeModal(true)}
               disabled={!worktreeData}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="press flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" />
               {t('git:worktrees.createFirst')}

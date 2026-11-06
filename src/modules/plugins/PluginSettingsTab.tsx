@@ -405,9 +405,9 @@ function PluginRecommendationCard({
   const { t } = useTranslation('settings');
   const Icon = recommendation.icon;
   const isOfficial = recommendation.source === 'official';
-  const accentClass = isOfficial ? 'bg-blue-500/30' : 'bg-amber-500/40';
-  const hoverClass = isOfficial ? 'hover:border-blue-400 dark:hover:border-blue-500' : 'hover:border-amber-400 dark:hover:border-amber-500';
-  const iconClass = isOfficial ? 'text-blue-500' : 'text-amber-500';
+  const accentClass = isOfficial ? 'bg-primary/30' : 'bg-amber-500/40';
+  const hoverClass = isOfficial ? 'hover:border-primary/30' : 'hover:border-amber-400 dark:hover:border-amber-500';
+  const iconClass = isOfficial ? 'text-primary' : 'text-amber-500';
 
   return (
     <div className={`relative flex overflow-hidden rounded-lg border border-dashed border-border bg-card transition-all duration-200 ${hoverClass}`}>

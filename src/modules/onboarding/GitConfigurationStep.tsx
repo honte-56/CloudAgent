@@ -21,7 +21,7 @@ export default function GitConfigurationStep({
   return (
     <div className="space-y-5">
       <div className="text-center">
-        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-inset ring-primary/20">
+        <div className="squircle mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-container text-primary-container-foreground">
           <GitBranch className="h-7 w-7 text-primary" />
         </div>
         <h2 className="font-serif text-xl font-bold tracking-tight text-foreground">{t('onboarding.gitStepTitle')}</h2>
@@ -41,7 +41,7 @@ export default function GitConfigurationStep({
             id="gitName"
             value={gitName}
             onChange={(event) => onGitNameChange(event.target.value)}
-            className="w-full rounded-xl border border-border bg-background/60 px-4 py-2.5 text-foreground shadow-sm transition-colors placeholder:text-muted-foreground/60 hover:border-foreground/20 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="squircle w-full rounded-2xl border border-transparent bg-input/70 px-4 py-3 text-foreground transition-[background-color,box-shadow,border-color] placeholder:text-muted-foreground/70 hover:bg-input focus:border-ring/40 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
             placeholder={t('onboarding.gitNamePlaceholder')}
             required
             disabled={isSubmitting}
@@ -59,7 +59,7 @@ export default function GitConfigurationStep({
             id="gitEmail"
             value={gitEmail}
             onChange={(event) => onGitEmailChange(event.target.value)}
-            className="w-full rounded-xl border border-border bg-background/60 px-4 py-2.5 text-foreground shadow-sm transition-colors placeholder:text-muted-foreground/60 hover:border-foreground/20 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="squircle w-full rounded-2xl border border-transparent bg-input/70 px-4 py-3 text-foreground transition-[background-color,box-shadow,border-color] placeholder:text-muted-foreground/70 hover:bg-input focus:border-ring/40 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
             placeholder={t('onboarding.gitEmailPlaceholder')}
             required
             disabled={isSubmitting}

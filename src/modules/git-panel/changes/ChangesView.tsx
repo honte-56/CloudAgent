@@ -184,7 +184,7 @@ export default function ChangesView({
           </div>
         ) : gitStatus?.hasCommits === false && hasChangedFiles(gitStatus) ? (
           <div className="flex flex-col items-center justify-center p-8 text-center">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/50">
+            <div className="squircle mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-muted">
               <GitBranch className="h-7 w-7 text-muted-foreground/50" />
             </div>
             <h3 className="mb-2 text-lg font-medium text-foreground">{t('git:changes.noCommitsTitle')}</h3>
@@ -194,7 +194,7 @@ export default function ChangesView({
             <button
               onClick={() => void onCreateInitialCommit()}
               disabled={isCreatingInitialCommit}
-              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="press flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isCreatingInitialCommit ? (
                 <>
@@ -217,7 +217,7 @@ export default function ChangesView({
         ) : (
           <div className={isMobile ? 'pb-4' : ''}>
             {/* STAGED section */}
-            <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5">
+            <div className="sticky top-0 z-[1] flex items-center justify-between bg-background/90 px-4 pb-1.5 pt-3 backdrop-blur">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('git:changes.stagedCount', { n: selectedFiles.size })}
               </span>
@@ -228,7 +228,7 @@ export default function ChangesView({
                     setSelectedFiles(new Set());
                     enqueueStageOp(() => onUnstageFiles(filesToUnstage));
                   }}
-                  className="text-xs text-primary transition-colors hover:text-primary/80"
+                  className="press rounded-full px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                 >
                   {t('git:changes.unstageAll')}
                 </button>
@@ -254,7 +254,7 @@ export default function ChangesView({
             )}
 
             {/* CHANGES section */}
-            <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5">
+            <div className="sticky top-0 z-[1] flex items-center justify-between bg-background/90 px-4 pb-1.5 pt-3 backdrop-blur">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('git:changes.changesCount', { n: unstagedFiles.size })}
               </span>
@@ -265,7 +265,7 @@ export default function ChangesView({
                     setSelectedFiles(new Set(changedFiles));
                     enqueueStageOp(() => onStageFiles(filesToStage));
                   }}
-                  className="text-xs text-primary transition-colors hover:text-primary/80"
+                  className="press rounded-full px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                 >
                   {t('git:changes.stageAll')}
                 </button>

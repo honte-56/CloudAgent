@@ -37,8 +37,8 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-56 flex-shrink-0 border-r border-border bg-muted/30 md:flex md:flex-col">
-        <nav className="flex flex-col gap-1 p-3">
+      <aside className="hidden w-56 flex-shrink-0 md:flex md:flex-col">
+        <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -48,10 +48,10 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
                 key={item.id}
                 onClick={() => onChange(item.id)}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors duration-150',
+                  'press-soft flex items-center gap-3 rounded-full px-4 py-2.5 text-left text-sm font-medium',
                   isActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground active:bg-accent/50',
+                    ? 'bg-primary-container text-primary-container-foreground'
+                    : 'text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground',
                 )}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
@@ -63,7 +63,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
       </aside>
 
       {/* Mobile horizontal nav — pill bar */}
-      <div className="flex-shrink-0 border-b border-border px-3 py-2 md:hidden">
+      <div className="flex-shrink-0 px-3 pb-2 md:hidden">
         <PillBar className="scrollbar-hide w-full overflow-x-auto">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;

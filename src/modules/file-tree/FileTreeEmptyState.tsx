@@ -10,7 +10,7 @@ type FileTreeEmptyStateProps = {
 export default function FileTreeEmptyState({ icon: Icon, title, description }: FileTreeEmptyStateProps) {
   return (
     <div className="py-8 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-muted">
+      <div className="squircle mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
         <Icon className="h-6 w-6 text-muted-foreground" />
       </div>
       <h4 className="mb-1 font-medium text-foreground">{title}</h4>

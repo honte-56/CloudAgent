@@ -80,10 +80,10 @@ export default function CommitComposer({
       }`}
     >
       {isMobile && isCollapsed ? (
-        <div className="border-b border-border/60 px-4 py-2">
+        <div className="px-4 py-2">
           <button
             onClick={() => setIsCollapsed(false)}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
+            className="press flex h-10 w-full items-center justify-center gap-2 rounded-full bg-primary-container px-4 text-sm font-medium text-primary-container-foreground hover:brightness-[0.97] dark:hover:brightness-110"
           >
             <GitCommit className="h-4 w-4" />
             <span>{t('git:composer.commitFiles', { count: selectedFileCount })}</span>
@@ -91,13 +91,13 @@ export default function CommitComposer({
           </button>
         </div>
       ) : (
-        <div className="border-b border-border/60 px-4 py-3">
+        <div className="px-4 py-3">
           {isMobile && (
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-medium text-foreground">{t('git:composer.title')}</span>
               <button
                 onClick={() => setIsCollapsed(true)}
-                className="rounded-lg p-1 transition-colors hover:bg-accent"
+                className="press rounded-full p-1.5 hover:bg-foreground/[0.06]"
               >
                 <ChevronDown className="h-4 w-4 rotate-180" />
               </button>
@@ -108,7 +108,7 @@ export default function CommitComposer({
             value={commitMessage}
             onChange={(event) => setCommitMessage(event.target.value)}
             placeholder={t('git:composer.placeholder')}
-            className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className="squircle w-full resize-none rounded-2xl border border-transparent bg-input/70 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/20"
             rows={3}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
@@ -125,7 +125,7 @@ export default function CommitComposer({
             <button
               onClick={requestCommitConfirmation}
               disabled={!commitMessage.trim() || selectedFileCount === 0 || isCommitting}
-              className="flex items-center space-x-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="press flex h-9 items-center space-x-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Check className="h-3 w-3" />
               <span>{isCommitting ? t('git:composer.committing') : t('git:composer.commit')}</span>

@@ -47,11 +47,11 @@ type TerminalShortcutsPanelProps = {
 const preventFocusSteal = (e: React.PointerEvent) => e.preventDefault();
 
 const KEY_BTN =
-  'shrink-0 rounded-md border border-border bg-muted px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors select-none active:bg-blue-600 active:text-white active:border-blue-600 disabled:cursor-not-allowed disabled:opacity-40';
+  'press shrink-0 rounded-full bg-muted px-3 py-1.5 text-xs font-medium text-foreground select-none active:bg-primary active:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40';
 const KEY_BTN_ACTIVE =
-  'shrink-0 rounded-md border border-blue-500 bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors select-none disabled:cursor-not-allowed disabled:opacity-40';
+  'press shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground select-none disabled:cursor-not-allowed disabled:opacity-40';
 const ICON_BTN =
-  'shrink-0 rounded-md border border-border bg-muted p-1.5 text-foreground transition-colors select-none active:bg-blue-600 active:text-white active:border-blue-600 disabled:cursor-not-allowed disabled:opacity-40';
+  'press shrink-0 rounded-full bg-muted p-1.5 text-foreground select-none active:bg-primary active:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40';
 
 /** Rendered by Shell's full and minimal views to send keys a mobile keyboard cannot produce, such as Esc, Tab, Ctrl and the arrows. */
 export default function TerminalShortcutsPanel({
@@ -111,7 +111,7 @@ export default function TerminalShortcutsPanel({
 
   return (
     <div className={`pointer-events-none fixed inset-x-0 ${bottomOffset} z-20 px-2 md:hidden`}>
-      <div className="pointer-events-auto flex items-center gap-1 overflow-x-auto rounded-lg border border-border bg-card/95 px-1.5 py-1.5 shadow-lg backdrop-blur-sm [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="squircle pointer-events-auto flex items-center gap-1 overflow-x-auto rounded-full border border-border/50 bg-card/90 px-1.5 py-1.5 shadow-floating backdrop-blur-md [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
           onPointerDown={preventFocusSteal}

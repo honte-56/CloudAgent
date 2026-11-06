@@ -74,7 +74,7 @@ const namespaceAccentClasses: Record<string, string> = {
   skill: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200',
   project: 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-400/20 dark:bg-indigo-400/10 dark:text-indigo-200',
   user: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200',
-  other: 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-500/20 dark:bg-gray-500/10 dark:text-gray-200',
+  other: 'border-border bg-gray-50 text-gray-600 dark:bg-gray-500/10 dark:text-gray-200',
 };
 
 const MENU_EDGE_GAP = 16;

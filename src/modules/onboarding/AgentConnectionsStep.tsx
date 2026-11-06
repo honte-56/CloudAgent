@@ -12,9 +12,9 @@ const providerCards = [
   {
     provider: 'claude' as const,
     title: 'Claude Code',
-    connectedClassName: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
-    iconContainerClassName: 'bg-blue-100 dark:bg-blue-900/30',
-    loginButtonClassName: 'bg-blue-600 hover:bg-blue-700',
+    connectedClassName: 'bg-primary/10 border-primary/30',
+    iconContainerClassName: 'bg-primary/10',
+    loginButtonClassName: 'bg-primary hover:bg-primary/90',
   },
   {
     provider: 'cursor' as const,
@@ -26,8 +26,8 @@ const providerCards = [
   {
     provider: 'codex' as const,
     title: 'OpenAI Codex',
-    connectedClassName: 'bg-gray-100 dark:bg-gray-800/50 border-gray-300 dark:border-gray-600',
-    iconContainerClassName: 'bg-gray-100 dark:bg-gray-800',
+    connectedClassName: 'bg-muted border-border',
+    iconContainerClassName: 'bg-muted',
     loginButtonClassName: 'bg-gray-800 hover:bg-gray-900 dark:bg-gray-700 dark:hover:bg-gray-600',
   },
   {

@@ -43,8 +43,8 @@ function PriorityIndicator({ priority }: { priority?: string }) {
   }
 
   return (
-    <div className="flex h-4 w-4 items-center justify-center rounded bg-gray-100 dark:bg-gray-800" title={t('tasks:priorities.lowTitle')}>
-      <Circle className="h-2.5 w-2.5 text-gray-400 dark:text-gray-500" />
+    <div className="flex h-4 w-4 items-center justify-center rounded bg-muted" title={t('tasks:priorities.lowTitle')}>
+      <Circle className="h-2.5 w-2.5 text-muted-foreground/70" />
     </div>
   );
 }
@@ -83,16 +83,16 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
   if (!hasTasks && !hasTaskMaster) {
     return (
       <>
-        <div className={cn('bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4', className)}>
+        <div className={cn('bg-primary/10 border border-primary/30 rounded-lg p-3 mb-4', className)}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              <List className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              <p className="text-sm font-medium text-gray-900 dark:text-white">{t('tasks:notConfigured.title')}</p>
+              <List className="h-4 w-4 text-primary" />
+              <p className="text-sm font-medium text-foreground">{t('tasks:notConfigured.title')}</p>
             </div>
 
             <button
               onClick={() => setShowSetupModal(true)}
-              className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs text-white transition-colors hover:bg-blue-700"
+              className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
             >
               <Terminal className="h-3 w-3" />
               {t('tasks:banner.initialize')}
@@ -101,14 +101,14 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
 
           <button
             onClick={() => setShowSetupDetails((current) => !current)}
-            className="mt-2 flex items-center gap-1 text-xs text-blue-700 hover:underline dark:text-blue-300"
+            className="mt-2 flex items-center gap-1 text-xs text-primary hover:underline"
           >
             <Settings className="h-3 w-3" />
             {showSetupDetails ? t('tasks:banner.hideDetails') : t('tasks:banner.whatIsTaskmaster')}
           </button>
 
           {showSetupDetails && (
-            <div className="mt-3 space-y-1 text-xs text-blue-900 dark:text-blue-100">
+            <div className="mt-3 space-y-1 text-xs text-foreground">
               <p>{t('tasks:banner.detailAiPowered')}</p>
               <p>{t('tasks:banner.detailPrdDriven')}</p>
               <p>{t('tasks:banner.detailKanbanList')}</p>
@@ -133,8 +133,8 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="mb-1 flex items-center gap-2">
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50">
-                  <Target className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10">
+                  <Target className="h-3 w-3 text-primary" />
                 </div>
                 <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Task {nextTask.id}</span>
                 <PriorityIndicator priority={nextTask.priority} />
@@ -145,7 +145,7 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
             <div className="flex flex-shrink-0 items-center gap-1">
               <button
                 onClick={() => onStartTask?.()}
-                className="flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               >
                 <Play className="h-3 w-3" />
                 {t('tasks:banner.startTask')}
@@ -192,12 +192,12 @@ export default function NextTaskBanner({ onShowAllTasks = null, onStartTask = nu
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <CheckCircle className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-            <span className="text-sm font-medium text-gray-900 dark:text-white">
+            <span className="text-sm font-medium text-foreground">
               {completedTasks === tasks.length ? t('tasks:banner.allComplete') : t('tasks:banner.noPending')}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600 dark:text-gray-400">
+            <span className="text-xs text-muted-foreground">
               {completedTasks}/{tasks.length}
             </span>
             {onShowAllTasks && (

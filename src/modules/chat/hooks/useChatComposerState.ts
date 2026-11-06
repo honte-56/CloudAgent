@@ -1,3 +1,6 @@
+import { useAttachmentUploads } from '@/modules/chat/hooks/useAttachmentUploads';
+import { useNativeMessageQueue } from '@/modules/chat/hooks/useNativeMessageQueue';
+import type { NativeQueuedMessage } from '@/shared/types';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChangeEvent,
@@ -23,6 +26,7 @@ import {
   readDraftText,
   readQueuedMessage,
   subscribeToChatDrafts,
+  steerQueuedMessage,
   writeDraftText,
   writeQueuedMessage,
 } from '@/shared/chatDrafts';
@@ -87,6 +91,16 @@ type CommandExecutionResult = {
 
 
 
+type SubmitOptions = {
+  /**
+   * Send the text as a chat message even when it starts with "/" (or is
+   * "help"). Set only for the re-submit of a custom command's expanded body:
+   * like the Claude Code CLI, that body is never read as a command again, so a
+   * body that opens with its own or another command's name cannot loop or
+   * run that command instead of being sent.
+   */
+  skipCommandInterception?: boolean;
+};
 
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
@@ -94,36 +108,12 @@ const createFakeSubmitEvent = () => {
 
 const MAX_ATTACHMENT_COUNT = 10;
 const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
+const PASTED_TEXT_ATTACHMENT_THRESHOLD = 2000;
 
 const isImageAttachment = (attachment: ChatAttachment) => {
   if (attachment.mimeType?.startsWith('image/')) return true;
   return /\.(gif|jpe?g|png|svg|webp)$/i.test(attachment.path || attachment.name || '');
 };
-
-const uploadAttachmentFiles = async (files: File[], cache: WeakMap<File, unknown>): Promise<unknown[]> => {
-  const attachments: unknown[] = [];
-  // Send each file separately so a batch cannot exceed the proxy's body limit.
-  // Cache successful files immediately so retrying a partial batch reuses them.
-  for (const file of files) {
-    if (!cache.has(file)) {
-      const formData = new FormData();
-      formData.append('files', file);
-      const response = await api.assets.uploadFiles(formData);
-      const result = await response.json().catch(() => null);
-      if (!response.ok) {
-        const detail = typeof result?.error === 'string' ? result.error : result?.error?.message;
-        throw new Error(detail || `File upload failed (HTTP ${response.status}). Please retry.`);
-      }
-      if (!Array.isArray(result?.attachments) || result.attachments.length !== 1) {
-        throw new Error('File upload returned an incomplete result');
-      }
-      cache.set(file, result.attachments[0]);
-    }
-    attachments.push(cache.get(file));
-  }
-  return attachments;
-};
-
 
 const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
   const saved = readQueuedMessage(sessionKey);
@@ -133,6 +123,7 @@ const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
         attachments: [],
         uploadedAttachments: saved.attachments ?? saved.images,
         options: saved.options,
+        deliveryError: saved.deliveryError,
       }
     : null;
 };
@@ -167,6 +158,21 @@ const getNotificationSessionSummary = (
  */
 const SAFARI_IME_RACE_WINDOW_MS = 30;
 
+/**
+ * A phone or tablet types through an on-screen keyboard: its return key is
+ * labelled "new line", and Shift+Enter — the desktop combination for a newline
+ * in Enter-to-send mode — cannot be typed on it at all. `(pointer: coarse)`
+ * marks exactly those primary inputs; a touch laptop keeps its fine primary
+ * pointer and with it the desktop Enter behaviour.
+ */
+function isSoftKeyboardEnvironment(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia('(pointer: coarse)').matches;
+}
+
+/** The composer's input state machine — text, drafts, sending, queueing and the keyboard handling around them; used by ChatInterface. */
 export function useChatComposerState({
   selectedProject,
   selectedSession,
@@ -227,6 +233,7 @@ export function useChatComposerState({
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   // Reuse uploaded descriptors when an unconfirmed message is retried, preserving its identity.
   const attachmentUploadCacheRef = useRef(new WeakMap<File, unknown>());
+  const { states: attachmentUploadStates, ready: readyAttachments, isReady: attachmentsReady, retry: retryAttachmentUpload, cancel: cancelUpload, forget: forgetUploads } = useAttachmentUploads(attachedFiles, attachmentUploadCacheRef.current);
   const [fileErrors, setFileErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [commandModalPayload, setCommandModalPayload] = useState<CommandModalPayload | null>(null);
@@ -239,6 +246,7 @@ export function useChatComposerState({
     ((
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
       queuedSubmission?: QueuedDraft,
+      submitOptions?: SubmitOptions,
     ) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
@@ -247,12 +255,20 @@ export function useChatComposerState({
   // to currentSessionId for a just-established session that hasn't been
   // handed back to the parent's `selectedSession` prop yet.
   const sessionKey = selectedSession?.id || currentSessionId || null;
+  const { messages: nativeQueuedMessages, busyId: nativeQueueBusyId, enqueue: enqueueNativeMessage, mutate: mutateNativeMessage } = useNativeMessageQueue(sessionKey, provider === 'claude' || provider === 'codex', isLoading);
   // The chat scope a draft belongs to: the open session, or the project for a
   // chat that has not been sent yet and so has no session id. Drafts used to be
   // keyed by project alone, so every session in a project shared one draft.
   const draftScope = sessionKey ?? (selectedProjectId ? `project:${selectedProjectId}` : null);
   const draftScopeRef = useRef(draftScope);
   draftScopeRef.current = draftScope;
+  // A new-chat submit spans the project draft and its newly allocated session.
+  // Reserve both scopes until admission settles so navigation cannot hide the
+  // spinner or allow a second send of the same first message.
+  const submittingScopesRef = useRef(new Map<string, Set<string>>());
+  // Drives the active scope's confirmation indicator, including scope handoff.
+  const [sendingScopes, setSendingScopes] = useState<Set<string>>(new Set());
+  const isSending = sendingScopes.has(draftScope ?? '');
   // Composition is tracked on `window` in the capture phase rather than on the textarea, so a
   // composition that starts in one field and ends after focus moves still closes cleanly.
   const isComposingRef = useRef(false);
@@ -405,12 +421,13 @@ export function useChatComposerState({
     inputValueRef.current = commandContent;
 
     // Defer submit to next tick so the command text is reflected in UI before dispatching.
+    // The expanded body is the message itself: it skips slash-command interception.
     setTimeout(() => {
       if (handleSubmitRef.current) {
-        handleSubmitRef.current(createFakeSubmitEvent());
+        handleSubmitRef.current(createFakeSubmitEvent(), undefined, { skipCommandInterception: true });
       }
     }, 0);
-  }, [addMessage]);
+  }, [addMessage, setInput]);
 
   const executeCommand = useCallback(
     async (command: SlashCommand, rawInput?: string, options?: { preserveInput?: boolean }) => {
@@ -420,9 +437,17 @@ export function useChatComposerState({
 
       try {
         const effectiveInput = rawInput ?? input;
-        const commandMatch = effectiveInput.match(new RegExp(`${escapeRegExp(command.name)}\\s*(.*)`));
-        const args =
-          commandMatch && commandMatch[1] ? commandMatch[1].trim().split(/\s+/) : [];
+        // Everything typed after the command name is its argument text, line
+        // breaks included (`[\s\S]`, unlike `.`), trimmed as the Claude Code CLI
+        // does. `$ARGUMENTS` gets it verbatim; `$1`, `$2`, … get its tokens.
+        // The name must open the input and end at whitespace or the end: a pick
+        // from the slash menu passes the whole composer, where the name may
+        // appear later or inside a longer word ("see /echo2 …" has no arguments).
+        const commandMatch = effectiveInput
+          .trimStart()
+          .match(new RegExp(`^${escapeRegExp(command.name)}(?=\\s|$)([\\s\\S]*)`));
+        const rawArgs = commandMatch ? commandMatch[1].trim() : '';
+        const args = rawArgs ? rawArgs.split(/\s+/) : [];
 
         // The `/api/commands/execute` context sends `projectId` now instead of
         // a folder-derived project name; the path is still included verbatim.
@@ -439,6 +464,7 @@ export function useChatComposerState({
           commandName: command.name,
           commandPath: command.path,
           args,
+          rawArgs,
           context,
         });
 
@@ -484,6 +510,7 @@ export function useChatComposerState({
       selectedSession?.id,
       addMessage,
       tokenBudget,
+      setInput,
     ],
   );
 
@@ -561,6 +588,13 @@ export function useChatComposerState({
     lastAutosizedInputRef.current = target.value;
   }, []);
 
+  const removeAttachment = useCallback((index: number) => {
+    const file = attachedFiles[index];
+    if (!file) return;
+    setAttachedFiles(previous => previous.filter(candidate => candidate !== file));
+    void cancelUpload(file).catch(error => addMessage({ type: 'error', content: error.message, timestamp: new Date() }));
+  }, [attachedFiles, cancelUpload, addMessage]);
+
   const handleAttachmentFiles = useCallback((files: File[]) => {
     const errors = new Map<string, string>();
     const accepted: File[] = [];
@@ -577,28 +611,43 @@ export function useChatComposerState({
     // react-dropzone's filtering previously hid failures from this callback.
     setFileErrors(errors);
     if (accepted.length) setAttachedFiles((previous) => [...previous, ...accepted].slice(0, MAX_ATTACHMENT_COUNT));
+    return accepted;
   }, [attachedFiles]);
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
-
+      const files: File[] = [];
       items.forEach((item) => {
         if (!item.type.startsWith('image/')) {
           return;
         }
         const file = item.getAsFile();
         if (file) {
-          handleAttachmentFiles([file]);
+          files.push(file);
         }
       });
 
       if (items.length === 0 && event.clipboardData.files.length > 0) {
-        const files = Array.from(event.clipboardData.files);
-        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-        if (imageFiles.length > 0) {
-          handleAttachmentFiles(imageFiles);
-        }
+        files.push(...Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')));
+      }
+
+      const text = event.clipboardData.getData?.('text/plain') ?? '';
+      // Count Unicode code points, not UTF-16 units, and stop once the threshold
+      // is reached so a large paste does not require an extra character array.
+      let characters = 0;
+      for (const _character of text) {
+        if (++characters >= PASTED_TEXT_ATTACHMENT_THRESHOLD) break;
+      }
+      const textFile = characters >= PASTED_TEXT_ATTACHMENT_THRESHOLD
+        ? new File([text], `pasted-text-${crypto.randomUUID()}.txt`, { type: 'text/plain;charset=utf-8' })
+        : null;
+      if (textFile) files.push(textFile);
+      if (files.length > 0) {
+        const accepted = handleAttachmentFiles(files);
+        // Leave native paste intact if attachment limits reject the TXT, so
+        // the user's text is never silently discarded.
+        if (textFile && accepted.includes(textFile)) event.preventDefault();
       }
     },
     [handleAttachmentFiles],
@@ -652,37 +701,25 @@ export function useChatComposerState({
     || (provider === 'claude' && (isLoading || Boolean(sessionKey && processingSessions?.get(sessionKey)?.background)));
   const handleSteer = useCallback(async () => {
     const targetSessionId = sessionKey;
-    const content = inputValueRef.current;
-    if (steeringInFlightRef.current || !canSteer || !targetSessionId || !content.trim() || attachedFiles.length > 0) return;
+    const queued = queuedDraft;
+    if (steeringInFlightRef.current || !canSteer || !targetSessionId || !queued) return;
     steeringInFlightRef.current = true;
     setIsSteering(true);
     try {
-      const response = await api.providers.steerSession(targetSessionId, content);
-      const body = await response.json();
-      if (!response.ok || body?.data?.delivered !== true) {
-        throw new Error(body?.error?.message || body?.error || 'Live input could not be confirmed.');
-      }
-      recordSentMessage(content, targetSessionId);
-      // A slow response must never clear new typing or append to another chat.
+      await steerQueuedMessage(targetSessionId);
+      const uploaded = (queued.uploadedAttachments ?? []) as ChatAttachment[];
       if (sessionKeyRef.current === targetSessionId) {
-        addMessage({ type: 'user', content, timestamp: new Date() });
-        if (inputValueRef.current === content) {
-          setInput('');
-          inputValueRef.current = '';
-          writeDraftText(targetSessionId, '');
-        }
+        addMessage({ type: 'user', content: queued.content, images: uploaded.filter(isImageAttachment), files: uploaded.filter(file => !isImageAttachment(file)), timestamp: new Date() });
         scrollToBottom();
-      } else if (readDraftText(targetSessionId) === content) {
-        writeDraftText(targetSessionId, '');
       }
     } catch (error) {
-      // Retain the draft. In particular, a timeout is not proof of non-delivery.
       if (sessionKeyRef.current === targetSessionId) addMessage({ type: 'error', content: error instanceof Error ? error.message : String(error), timestamp: new Date() });
     } finally {
+      if (sessionKeyRef.current === targetSessionId) setQueuedDraft(restoreQueuedDraft(targetSessionId));
       steeringInFlightRef.current = false;
       setIsSteering(false);
     }
-  }, [sessionKey, canSteer, attachedFiles.length, recordSentMessage, addMessage, setInput, scrollToBottom]);
+  }, [sessionKey, canSteer, queuedDraft, addMessage, scrollToBottom]);
 
   // Read at send time through a ref: the map changes on every poll, and a
   // submit handler rebuilt that often would re-render the whole composer.
@@ -695,8 +732,10 @@ export function useChatComposerState({
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
       queuedSubmission?: QueuedDraft,
+      submitOptions?: SubmitOptions,
     ) => {
       event.preventDefault();
+      const submissionScope = draftScopeRef.current ?? '';
       const currentInput = queuedSubmission?.content ?? inputValueRef.current;
       const currentAttachments = queuedSubmission?.attachments ?? attachedFiles;
       const previouslyUploadedAttachments = queuedSubmission?.uploadedAttachments ?? [];
@@ -715,6 +754,7 @@ export function useChatComposerState({
       // Upload attached files now so the queued record contains durable image
       // descriptors that can be sent even if another session is open later.
       if (isLoading) {
+        if (steeringInFlightRef.current) return;
         // A run can restart in the tiny gap between scheduling and flushing a
         // queued submission. Put the same durable draft back without uploading
         // its files again.
@@ -728,7 +768,7 @@ export function useChatComposerState({
         const queuedSessionKey = sessionKey;
         let uploadedAttachments: unknown[] = [];
         try {
-          uploadedAttachments = await uploadAttachmentFiles(currentAttachments, attachmentUploadCacheRef.current);
+          uploadedAttachments = await readyAttachments(currentAttachments);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           console.error('Queued file upload failed:', error);
@@ -746,7 +786,18 @@ export function useChatComposerState({
           uploadedAttachments,
           options: queuedOptions,
         };
-        if (queuedSessionKey) {
+        const useNativeQueue = provider === 'claude' || provider === 'codex';
+        if (useNativeQueue) {
+          try { await enqueueNativeMessage(currentInput, uploadedAttachments); }
+          catch (error) {
+            addMessage({ type: 'error', content: error instanceof Error ? error.message : String(error), timestamp: new Date() });
+            return;
+          }
+        } else if (queuedSessionKey) {
+          if (readQueuedMessage(queuedSessionKey)) {
+            addMessage({ type: 'error', content: 'A message is already queued. Your new draft has been kept.', timestamp: new Date() });
+            return;
+          }
           // Write the claim ticket synchronously after upload; this closes the
           // gap before React's persistence effect runs.
           writeQueuedMessage(queuedSessionKey, {
@@ -769,7 +820,8 @@ export function useChatComposerState({
         }
 
         queuedDraftSessionRef.current = queuedSessionKey;
-        setQueuedDraft(durableDraft);
+        if (!useNativeQueue) setQueuedDraft(durableDraft);
+        forgetUploads(currentAttachments);
         setInput('');
         inputValueRef.current = '';
         setAttachedFiles([]);
@@ -789,11 +841,13 @@ export function useChatComposerState({
       // Also accept exact "help" as a convenience alias for users who expect CLI-style help.
       const commandInput = currentInput.trimEnd();
       const isHelpAlias = commandInput.trim().toLowerCase() === 'help';
-      if (commandInput.startsWith('/') || isHelpAlias) {
-        const firstSpace = commandInput.indexOf(' ');
+      if (!submitOptions?.skipCommandInterception && (commandInput.startsWith('/') || isHelpAlias)) {
+        // The name ends at the first whitespace of any kind, so "/cmd" followed
+        // by a line break still runs /cmd (the Claude Code CLI splits the same way).
+        const firstWhitespace = commandInput.search(/\s/);
         const commandName = isHelpAlias
           ? '/help'
-          : firstSpace > 0 ? commandInput.slice(0, firstSpace) : commandInput;
+          : firstWhitespace > 0 ? commandInput.slice(0, firstWhitespace) : commandInput;
         const matchedCommand =
           slashCommands.find((cmd: SlashCommand) => cmd.name === commandName) ||
           (commandName === '/help'
@@ -825,7 +879,7 @@ export function useChatComposerState({
       let uploadedAttachments = previouslyUploadedAttachments;
       if (uploadedAttachments.length === 0 && currentAttachments.length > 0) {
         try {
-          uploadedAttachments = await uploadAttachmentFiles(currentAttachments, attachmentUploadCacheRef.current);
+          uploadedAttachments = await readyAttachments(currentAttachments);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           console.error('File upload failed:', error);
@@ -887,6 +941,16 @@ export function useChatComposerState({
           return;
         }
 
+        const reservedScopes = submittingScopesRef.current.get(submissionScope);
+        reservedScopes?.add(targetSessionId);
+        setSendingScopes(new Set([...submittingScopesRef.current.values()].flatMap(scopes => [...scopes])));
+        // The new selection restores its own draft immediately. Move the
+        // current text before navigation, retaining edits made during creation.
+        const pendingText = draftScopeRef.current === submissionScope
+          ? inputValueRef.current : readDraftText(submissionScope);
+        writeDraftText(targetSessionId, pendingText);
+        writeDraftText(submissionScope, '');
+
         onSessionEstablished?.(targetSessionId, {
           provider,
           project: selectedProject,
@@ -899,7 +963,7 @@ export function useChatComposerState({
       // stopped, or finish where nothing is listening. Sending is the user's
       // call, but not one to make for them.
       const backgroundActivity = processingSessionsRef.current?.get(targetSessionId);
-      if (backgroundActivity?.background) {
+      if (backgroundActivity?.background && provider !== 'claude') {
         const work = ownBackgroundTasks(backgroundActivity.tasks ?? [])
           .map((task) => `• ${describeBackgroundTask(task, t)}`)
           .join('\n');
@@ -945,7 +1009,7 @@ export function useChatComposerState({
           },
         });
       } catch (error) {
-        if (draftScopeRef.current === sendingScope) {
+        if (draftScopeRef.current === sendingScope || sessionKeyRef.current === targetSessionId) {
           addMessage({ type: 'error', content: error instanceof Error ? error.message : String(error), timestamp: new Date() });
         }
         return;
@@ -970,6 +1034,7 @@ export function useChatComposerState({
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
         if (draftScopeRef.current) writeDraftText(draftScopeRef.current, '');
       }
+      forgetUploads(currentAttachments);
       setAttachedFiles((files) => files.filter((file) => !currentAttachments.includes(file)));
       setFileErrors(new Map());
 
@@ -991,6 +1056,10 @@ export function useChatComposerState({
       selectedProject,
       sendMessage,
       sessionKey,
+      enqueueNativeMessage,
+      readyAttachments,
+      forgetUploads,
+      setInput,
       addMessage,
       setIsUserScrolledUp,
       slashCommands,
@@ -998,37 +1067,32 @@ export function useChatComposerState({
     ],
   );
 
-  // Chat scopes with a submit still awaiting its upload or, for a brand-new
-  // chat, its session id. The composer does not change until that returns (the
-  // text stays, send stays enabled), so on a slow server the user submits
-  // again — and each extra submit of a new chat allocated its own session and
-  // sent it the same first message.
-  const submittingScopesRef = useRef(new Set<string>());
-  // Exposes the active scope's admission wait so the submit button cannot imply delivery.
-  const [sendingScopes, setSendingScopes] = useState<Set<string>>(new Set());
-  const isSending = sendingScopes.has(draftScope ?? '');
-
   const handleSubmit = useCallback(
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
       queuedSubmission?: QueuedDraft,
+      submitOptions?: SubmitOptions,
     ) => {
+      if (!attachmentsReady(queuedSubmission?.attachments ?? attachedFiles)) {
+        event.preventDefault();
+        return;
+      }
       const scope = draftScopeRef.current ?? '';
-      if (submittingScopesRef.current.has(scope)) {
+      if ([...submittingScopesRef.current.values()].some(scopes => scopes.has(scope))) {
         // Still cancel the event: an ignored form submit must not reload the page.
         event.preventDefault();
         return;
       }
-      submittingScopesRef.current.add(scope);
-      setSendingScopes(new Set(submittingScopesRef.current));
+      submittingScopesRef.current.set(scope, new Set([scope]));
+      setSendingScopes(new Set([...submittingScopesRef.current.values()].flatMap(scopes => [...scopes])));
       try {
-        await submitMessage(event, queuedSubmission);
+        await submitMessage(event, queuedSubmission, submitOptions);
       } finally {
         submittingScopesRef.current.delete(scope);
-        setSendingScopes(new Set(submittingScopesRef.current));
+        setSendingScopes(new Set([...submittingScopesRef.current.values()].flatMap(scopes => [...scopes])));
       }
     },
-    [submitMessage],
+    [submitMessage, attachedFiles, attachmentsReady],
   );
 
   useEffect(() => {
@@ -1038,15 +1102,21 @@ export function useChatComposerState({
   // The VPS dispatcher owns sending. While the card is visible, periodically
   // reconcile only its removal so the UI notices when the server claims it.
   useEffect(() => {
-    if (!sessionKey || !queuedDraft) {
+    if (!sessionKey) {
       return;
     }
     let cancelled = false;
     const reconcile = async () => {
+      if (steeringInFlightRef.current) return;
       await hydrateChatDrafts();
-      if (!cancelled && !readQueuedMessage(sessionKey)) {
+      if (cancelled || steeringInFlightRef.current) return;
+      const saved = readQueuedMessage(sessionKey);
+      if (!saved && queuedDraft) {
         queuedDraftSessionRef.current = sessionKey;
         setQueuedDraft(null);
+      } else if (saved?.deliveryError && saved.deliveryError !== queuedDraft?.deliveryError) {
+        queuedDraftSessionRef.current = sessionKey;
+        setQueuedDraft(restoreQueuedDraft(sessionKey));
       }
     };
     const timer = setInterval(() => void reconcile(), 5_000);
@@ -1057,17 +1127,53 @@ export function useChatComposerState({
   }, [queuedDraft, sessionKey]);
 
   const editQueuedDraft = useCallback(() => {
-    if (!queuedDraft) {
+    if (!queuedDraft || steeringInFlightRef.current) {
       return;
     }
     setQueuedDraft(null);
     setInput(queuedDraft.content);
     inputValueRef.current = queuedDraft.content;
-    setAttachedFiles(queuedDraft.attachments);
+    const files = queuedDraft.attachments.length ? queuedDraft.attachments : (queuedDraft.uploadedAttachments ?? []).map(value => {
+      const descriptor = value as ChatAttachment;
+      const file = new File([], descriptor.name ?? 'attachment', { type: descriptor.mimeType ?? '' });
+      attachmentUploadCacheRef.current.set(file, descriptor);
+      return file;
+    });
+    setAttachedFiles(files);
     textareaRef.current?.focus();
-  }, [queuedDraft]);
+  }, [queuedDraft, setInput]);
+
+  const changeNativeQueuedMessage = useCallback(async (entry: NativeQueuedMessage, action: 'edit' | 'delete' | 'send') => {
+    const targetSessionId = sessionKey;
+    try {
+      const changed = await mutateNativeMessage(entry.id, action === 'send');
+      if (sessionKeyRef.current !== targetSessionId) return;
+      if (changed && action === 'edit') {
+        setInput(previous => previous ? `${previous}\n${entry.content}` : entry.content);
+        const files = entry.attachments.map(descriptor => {
+          const file = new File([], descriptor.name ?? 'attachment', { type: descriptor.mimeType ?? '' });
+          attachmentUploadCacheRef.current.set(file, descriptor);
+          return file;
+        });
+        setAttachedFiles(previous => [...previous, ...files]);
+      }
+    } catch (error) {
+      if (sessionKeyRef.current !== targetSessionId) return;
+      addMessage({ type: 'error', content: error instanceof Error ? error.message : String(error), timestamp: new Date() });
+      if (action === 'send') {
+        setInput(previous => !previous || previous === entry.content ? entry.content : `${previous}\n${entry.content}`);
+        const files = entry.attachments.map(descriptor => {
+          const file = new File([], descriptor.name ?? 'attachment', { type: descriptor.mimeType ?? '' });
+          attachmentUploadCacheRef.current.set(file, descriptor);
+          return file;
+        });
+        setAttachedFiles(previous => [...previous, ...files]);
+      }
+    }
+  }, [mutateNativeMessage, setInput, addMessage, sessionKey]);
 
   const deleteQueuedDraft = useCallback(() => {
+    if (steeringInFlightRef.current) return;
     setQueuedDraft(null);
   }, []);
 
@@ -1134,6 +1240,7 @@ export function useChatComposerState({
         content: queuedDraft.content,
         options: queuedDraft.options,
         attachments: queuedDraft.uploadedAttachments,
+        deliveryError: queuedDraft.deliveryError,
       });
     } else {
       clearQueuedMessage(sessionKey);
@@ -1190,7 +1297,7 @@ export function useChatComposerState({
 
       handleCommandInputChange(newValue, cursorPos);
     },
-    [handleCommandInputChange, resetCommandMenuState, setCursorPosition],
+    [handleCommandInputChange, resetCommandMenuState, setCursorPosition, setInput],
   );
 
   const handleKeyDown = useCallback(
@@ -1223,7 +1330,16 @@ export function useChatComposerState({
         if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
           event.preventDefault();
           handleSubmit(event);
-        } else if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !sendByCtrlEnter) {
+        } else if (
+          !event.shiftKey
+          && !event.ctrlKey
+          && !event.metaKey
+          && !sendByCtrlEnter
+          // Submitting on plain Enter strands the newline on a soft keyboard:
+          // the return key is the only Enter, and no Shift exists to combine
+          // with it. The send button still submits.
+          && !isSoftKeyboardEnvironment()
+        ) {
           event.preventDefault();
           handleSubmit(event);
         }
@@ -1267,10 +1383,11 @@ export function useChatComposerState({
       textareaRef.current.focus();
     }
     setIsTextareaExpanded(false);
-  }, [resetCommandMenuState]);
+  }, [resetCommandMenuState, setInput]);
 
   const handleAbortSession = useCallback(() => {
     if (!canAbortSession) {
+      addMessage({ type: 'error', content: 'This task belongs to an external CLI. Stop it in the terminal that started it.', timestamp: new Date() });
       return;
     }
 
@@ -1286,7 +1403,7 @@ export function useChatComposerState({
       type: 'chat.abort',
       sessionId: targetSessionId,
     });
-  }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
+  }, [addMessage, canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {
@@ -1320,11 +1437,13 @@ export function useChatComposerState({
         });
       });
 
-      setPendingPermissionRequests((previous) =>
+      // Codex retracts the card only after its native response is written.
+      // A disconnected browser must keep the question available for retry.
+      if (provider !== 'codex') setPendingPermissionRequests((previous) =>
         previous.filter((request) => !validIds.includes(request.requestId)),
       );
     },
-    [sendMessage, setPendingPermissionRequests],
+    [sendMessage, setPendingPermissionRequests, provider],
   );
 
   const [isInputFocused, setIsInputFocused] = useState(false);
@@ -1375,6 +1494,9 @@ export function useChatComposerState({
     renderInputWithMentions,
     selectFile,
     attachedFiles,
+    attachmentUploadStates: attachmentUploadStates,
+    retryAttachmentUpload,
+    removeAttachment,
     setAttachedFiles,
     fileErrors,
     getRootProps,
@@ -1387,6 +1509,9 @@ export function useChatComposerState({
     isSteering,
     isSending,
     queuedDraft,
+    nativeQueuedMessages: nativeQueuedMessages,
+    nativeQueueBusyId: nativeQueueBusyId,
+    changeNativeQueuedMessage,
     editQueuedDraft,
     deleteQueuedDraft,
     handleVoiceTranscript,

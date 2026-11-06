@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { createRef } from 'react';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { test, vi } from 'vitest';
 
 import ChatMessagesPane from '@/modules/chat/transcript/ChatMessagesPane';
@@ -143,4 +143,16 @@ test('a stream tick re-renders the growing row, not the collapsed tool groups ab
     [1, 1, 1],
     `only the streaming row may re-render per flush; got ${JSON.stringify(perFlush)}`,
   );
+});
+
+test('history header reports loaded rows without a stale total and exposes older-page loading', () => {
+  const messages = [assistantRow(1)];
+  const loadEarlierMessages = vi.fn();
+  const props = { ...paneProps(messages), hasMoreMessages: true, allMessagesLoaded: false, totalMessages: 49, sessionMessagesCount: 264, loadEarlierMessages };
+  const view = render(<UiPreferencesProvider><ChatMessagesPane {...(props as any)} /></UiPreferencesProvider>);
+  assert.ok(view.getByText('264 messages loaded'));
+  assert.equal(view.queryByText(/264 of 49/), null);
+  fireEvent.click(view.getByRole('button', { name: 'Load earlier messages' }));
+  assert.equal(loadEarlierMessages.mock.calls.length, 1);
+  view.unmount();
 });

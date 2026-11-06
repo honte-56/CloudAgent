@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { FileIcon, XIcon } from 'lucide-react';
 
+import type { AttachmentUploadState } from '@/shared/types';
 import { ImageLightbox } from '@/modules/chat/transcript/ChatMessageImages';
 
 type ComposerAttachmentProps = {
   file: File;
   onRemove: () => void;
   error?: string;
+  onRetry?: () => void;
+  uploadState?: AttachmentUploadState;
 };
 
 const formatFileSize = (size: number) => {
@@ -19,7 +22,7 @@ const formatFileSize = (size: number) => {
  * Rendered by chat's ChatComposer for each pending attachment, showing its
  * thumbnail or file chip, upload progress and remove control.
  */
-const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) => {
+const ComposerAttachment = ({ file, onRemove, error, uploadState, onRetry }: ComposerAttachmentProps) => {
   const [preview, setPreview] = useState<string | undefined>(undefined);
   const [expanded, setExpanded] = useState(false);
   const isImage = file.type.startsWith('image/');
@@ -58,6 +61,17 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
           </div>
         </div>
       )}
+      {uploadState && ['compressing', 'uploading'].includes(uploadState.status) && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-black/55" role="progressbar"
+          aria-label={`Uploading ${file.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(uploadState.progress)}>
+          <svg className="h-9 w-9 -rotate-90 text-white" viewBox="0 0 36 36" aria-hidden>
+            <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+            <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+              strokeDasharray="87.96" strokeDashoffset={87.96 * (1 - Math.max(3, uploadState.progress) / 100)} />
+          </svg>
+          <span className="absolute text-[9px] font-medium text-white">{Math.round(uploadState.progress)}%</span>
+        </div>
+      )}
       {error && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-red-500/50">
           <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -65,10 +79,12 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
           </svg>
         </div>
       )}
+      {uploadState?.status === 'error' && onRetry && <button type="button" onClick={onRetry}
+        className="absolute inset-x-1 bottom-1 rounded bg-background px-2 py-1 text-xs text-foreground" aria-label={`Retry ${file.name}`}>重试上传</button>}
       <button
         type="button"
         onClick={onRemove}
-        className="absolute -right-1.5 -top-1.5 rounded-full border border-border/40 bg-background/90 p-1 text-foreground shadow-sm backdrop-blur transition-opacity hover:bg-background focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+        className="absolute z-10 -right-1.5 -top-1.5 rounded-full border border-border/40 bg-background/90 p-1 text-foreground shadow-sm backdrop-blur transition-opacity hover:bg-background focus:opacity-100"
         aria-label={`Remove ${file.name}`}
       >
         <XIcon className="h-3 w-3" aria-hidden />

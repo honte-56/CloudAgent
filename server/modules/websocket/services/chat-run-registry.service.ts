@@ -1,4 +1,4 @@
-import { sessionsDb } from '@/modules/database/index.js';
+import { sessionsDb, chatEventsDb } from '@/modules/database/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
 import type {
@@ -19,8 +19,8 @@ type ChatRunStatus = 'running' | 'completed';
  * - `status`: drives `chat_subscribed.isProcessing`, prevents double sends
  *   into the same session, and guards the synthetic-complete fallback in the
  *   chat handler (only emitted when a runtime died without completing).
- * - `lastSeq` / `events`: the per-run event log. Every live event gets a
- *   monotonically increasing `seq` and is buffered so a reconnecting client
+ * - `lastSeq`: the durable session delivery cursor. Every live event gets a
+ *   monotonically increasing `seq` and is journaled so a reconnecting client
  *   can replay exactly the events it missed via `chat.subscribe`.
  */
 type ChatRun = {
@@ -28,8 +28,10 @@ type ChatRun = {
   provider: LLMProvider;
   providerSessionId: string | null;
   status: ChatRunStatus;
+  /** Agent API reads the terminal outcome without retaining the full event journal. */
+  aborted: boolean;
   lastSeq: number;
-  events: NormalizedMessage[];
+  streams: Map<string, NormalizedMessage>;
   writer: ChatSessionWriter;
   startedAt: number;
   completedAt: number | null;
@@ -41,14 +43,6 @@ type ChatRun = {
  * example when the browser tab was asleep while the run completed).
  */
 const COMPLETED_RUN_RETENTION_MS = 5 * 60 * 1000;
-
-/**
- * Upper bound on buffered events per run so a very long tool-heavy run cannot
- * grow memory unbounded. When exceeded, the oldest events are dropped —
- * a reconnecting client whose `lastSeq` predates the buffer falls back to a
- * REST history refresh, which is always the authoritative source.
- */
-const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
 
 /**
  * Active and recently-completed runs keyed by app session id.
@@ -114,32 +108,42 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
   if (message.kind === 'status' && message.status === 'live_input'
     && runs.get(run.appSessionId) === run && run.status === 'completed') {
     run.status = 'running';
+    run.aborted = false;
     run.completedAt = null;
   }
 
-  run.lastSeq += 1;
+  if (runs.get(run.appSessionId) !== run) return null;
+  if (message.kind === 'history_truncated') run.streams.clear();
+  const wireDelta = message.kind === 'stream_delta' && !message.streamSnapshot ? message.content : undefined;
+  const key = message.messageKey;
+  if (message.kind === 'stream_delta' && key) {
+    const previous = run.streams.get(key);
+    message = { ...message, timestamp: previous?.timestamp ?? message.timestamp,
+      content: message.streamSnapshot ? message.content : (previous?.content ?? '') + (message.content ?? ''),
+      streamSnapshot: true, firstSeq: previous?.firstSeq ?? run.lastSeq + 1 };
 
-  const outbound: NormalizedMessage = {
-    ...message,
-    sessionId: run.appSessionId,
-    seq: run.lastSeq,
-  };
+  } else if (key && message.kind === 'text') {
+    const previous = run.streams.get(key);
+    if (previous) message = { ...message, timestamp: previous.timestamp, firstSeq: previous.firstSeq };
+
+  }
+  const outbound = chatEventsDb.append(run.appSessionId, message);
+  run.lastSeq = outbound.seq!;
+  if (key && message.kind === 'stream_delta') run.streams.set(key, message);
+  else if (key && message.kind === 'text') run.streams.delete(key);
 
   if (message.kind === 'complete') {
     // The provider may report its own id here; the frontend only ever knows
     // the app id, so the "actual" id is by definition the app id as well.
     outbound.actualSessionId = run.appSessionId;
     run.status = 'completed';
+    run.aborted = message.aborted === true;
     run.completedAt = Date.now();
     evictRunLater(run);
   }
 
-  run.events.push(outbound);
-  if (run.events.length > MAX_BUFFERED_EVENTS_PER_RUN) {
-    run.events.splice(0, run.events.length - MAX_BUFFERED_EVENTS_PER_RUN);
-  }
 
-  return outbound;
+  return wireDelta !== undefined ? { ...outbound, content: wireDelta, streamSnapshot: false } : outbound;
 }
 
 /**
@@ -156,10 +160,9 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
     return;
   }
 
-  run.providerSessionId = providerSessionId;
-
   try {
     sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId);
+    run.providerSessionId = providerSessionId;
     void broadcastSessionUpserted(run.appSessionId).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
@@ -175,6 +178,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
       providerSessionId,
       error: message,
     });
+    throw error;
   }
 }
 
@@ -219,8 +223,9 @@ export const chatRunRegistry = {
       provider: input.provider,
       providerSessionId: input.providerSessionId,
       status: 'running',
-      lastSeq: 0,
-      events: [],
+      aborted: false,
+      lastSeq: chatEventsDb.cursor(input.appSessionId),
+      streams: new Map(),
       writer: null as unknown as ChatSessionWriter,
       startedAt: Date.now(),
       completedAt: null,
@@ -240,6 +245,9 @@ export const chatRunRegistry = {
     runs.set(input.appSessionId, run);
     return run;
   },
+
+  /** Authoritative delivery cursor survives run completion, eviction and process restart. */
+  getCursor(appSessionId: string): number { return chatEventsDb.cursor(appSessionId); },
 
   getRun(appSessionId: string): ChatRun | undefined {
     return runs.get(appSessionId);
@@ -295,12 +303,8 @@ export const chatRunRegistry = {
    * means the buffer was truncated; the client should refresh over REST.
    */
   replayEvents(appSessionId: string, afterSeq: number): NormalizedMessage[] {
-    const run = runs.get(appSessionId);
-    if (!run) {
-      return [];
-    }
-
-    return run.events.filter((event) => typeof event.seq === 'number' && event.seq > afterSeq);
+    runs.get(appSessionId)?.writer.flush();
+    return chatEventsDb.replay(appSessionId, afterSeq);
   },
 
   /**

@@ -250,3 +250,23 @@ export const getQuickSettingsTabId = (tab: QuickSettingsTab): string => `quick-s
 
 /** DOM id of the tabpanel a quick settings tab controls; pairs with `getQuickSettingsTabId`. */
 export const getQuickSettingsTabPanelId = (tab: QuickSettingsTab): string => `quick-settings-tabpanel-${tab}`;
+
+//----------------- LEGACY RUNTIME CONTEXT DISPLAY ------------
+
+// Exact old wire prefix, frozen to match stored CLI transcripts. New runs use a tagged envelope.
+const LEGACY_GITHUB_AUTH_INSTRUCTIONS = 'This project has GitHub authentication configured for git over HTTPS and gh. Use git and gh directly; do not log in, read, print, or copy credentials. GitHub SSH remotes are mapped to HTTPS for this run. Commit and push only as requested by the user. Git author identity comes from the existing Git configuration.';
+
+/** Removes only a leading CloudCLI runtime-context envelope or its exact legacy
+ * GitHub paragraph. Quoted/embedded instructions and the user's remaining text
+ * are preserved. The caller marks cleaned rows to avoid stripping twice. */
+export function stripRuntimeInstructions(text: string): string {
+  const tagged = /^<cloudcli_runtime_context>\r?\n[\s\S]*?\r?\n<\/cloudcli_runtime_context>\r?\n\r?\n/.exec(text);
+  if (tagged) return text.slice(tagged[0].length);
+  for (const separator of ['\n\n', '\r\n\r\n']) {
+    const prefix = LEGACY_GITHUB_AUTH_INSTRUCTIONS + separator;
+    if (text.startsWith(prefix)) return text.slice(prefix.length);
+  }
+  return text;
+}
+
+// ---------------------------

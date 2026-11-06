@@ -29,7 +29,7 @@ type SidebarProjectSessionsProps = {
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (sessionId: string, sessionTitle: string) => void;
-  onForkSession?: (session: SessionWithProvider) => void;
+  onForkSession?: (session: SessionWithProvider) => void | Promise<void>;
   onLoadMoreSessions: (projectId: string) => void;
   onNewSession: (project: Project) => void;
   /** The sessions ticked here, or null when this project's list is not in selection mode. */

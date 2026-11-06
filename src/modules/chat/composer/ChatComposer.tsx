@@ -14,7 +14,8 @@ import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon, PencilIc
 
 import { useVoiceInput } from '@/modules/chat/hooks/useVoiceInput';
 import { useVoiceAvailable } from '@/modules/chat/hooks/useVoiceAvailable';
-import type { QueuedDraft, ScheduledMessage, SlashCommand,SessionActivity,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
+import { MCP_ELICITATION_TOOL_NAME } from '@/shared/constants';
+import type { AttachmentUploadState, NativeQueuedMessage, QueuedDraft, ScheduledMessage, SlashCommand,SessionActivity,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
 import {
   PromptInput,
   PromptInputHeader,
@@ -72,6 +73,9 @@ type ChatComposerProps = {
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
   queuedDraft: QueuedDraft | null;
+  nativeQueuedMessages?: NativeQueuedMessage[];
+  nativeQueueBusyId?: string | null;
+  onChangeNativeQueuedMessage?: (entry: NativeQueuedMessage, action: 'edit' | 'delete' | 'send') => Promise<void>;
   onSteer?: () => Promise<void>;
   isSteering?: boolean;
   isSending?: boolean;
@@ -85,6 +89,8 @@ type ChatComposerProps = {
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
   attachedFiles: File[];
+  attachmentUploadStates?: Map<File, AttachmentUploadState>;
+  onRetryAttachmentUpload?: (file: File) => void;
   onRemoveAttachment: (index: number) => void;
   fileErrors: Map<string, string>;
   showFileDropdown: boolean;
@@ -150,6 +156,9 @@ export default function ChatComposer({
   onSubmit,
   isDragActive,
   queuedDraft,
+  nativeQueuedMessages = [],
+  nativeQueueBusyId,
+  onChangeNativeQueuedMessage,
   onSteer,
   isSteering = false,
   isSending = false,
@@ -161,6 +170,8 @@ export default function ChatComposer({
   onEditQueuedDraft,
   onDeleteQueuedDraft,
   attachedFiles,
+  attachmentUploadStates,
+  onRetryAttachmentUpload,
   onRemoveAttachment,
   fileErrors,
   showFileDropdown,
@@ -248,9 +259,10 @@ export default function ChatComposer({
   const isRecording = voiceState === 'recording';
   const isTranscribing = voiceState === 'transcribing';
 
-  // Detect if the AskUserQuestion interactive panel is active
+  // Detect if an interactive panel that takes the person's answer is active:
+  // a question from the agent, or an MCP server's request for input.
   const hasQuestionPanel = pendingPermissionRequests.some(
-    (r) => r.toolName === 'AskUserQuestion'
+    (r) => r.toolName === MCP_ELICITATION_TOOL_NAME || (r.toolName === 'AskUserQuestion' && (r.context as { isBlocking?: boolean } | undefined)?.isBlocking !== false)
   );
 
   // Hide the thinking/status bar while any permission request is pending
@@ -258,6 +270,7 @@ export default function ChatComposer({
   const hasActivityIndicator = Boolean(activity && !hasPendingPermissions);
 
   const hasQueuedDraft = Boolean(queuedDraft);
+  const attachmentsPending = attachedFiles.some(file => attachmentUploadStates?.get(file)?.status !== 'ready');
   const canQueueDraft = isLoading && Boolean(input.trim() || attachedFiles.length > 0);
   const submitHint = canQueueDraft
     ? hasQueuedDraft
@@ -286,6 +299,7 @@ export default function ChatComposer({
         <div className="mx-auto mb-3 max-w-[54.25rem]">
           <PermissionRequestsBanner
             pendingPermissionRequests={pendingPermissionRequests}
+            providerLabel={providerLabel}
             handlePermissionDecision={handlePermissionDecision}
             handleGrantToolPermission={handleGrantToolPermission}
           />
@@ -315,14 +329,24 @@ export default function ChatComposer({
         </div>
       )}
 
+      {nativeQueuedMessages.length > 0 && <div className="max-h-48 overflow-y-auto">{nativeQueuedMessages.map(entry => (
+        <QueuedMessageCard key={entry.id} content={entry.content} deliveryError={entry.deliveryError}
+          attachmentCount={entry.attachments.length} isSending={nativeQueueBusyId === entry.id}
+          onEdit={() => { void onChangeNativeQueuedMessage?.(entry, 'edit'); }}
+          onDelete={() => { void onChangeNativeQueuedMessage?.(entry, 'delete'); }}
+          onSendNow={() => onChangeNativeQueuedMessage?.(entry, 'send') ?? Promise.resolve()} />
+      ))}</div>}
       {queuedDraft && (
         <QueuedMessageCard
           content={queuedDraft.content}
+          deliveryError={queuedDraft.deliveryError}
           attachmentCount={
             queuedDraft.uploadedAttachments?.length ?? queuedDraft.attachments.length
           }
           onEdit={onEditQueuedDraft}
           onDelete={onDeleteQueuedDraft}
+          onSendNow={onSteer}
+          isSending={isSteering}
         />
       )}
 
@@ -402,7 +426,9 @@ export default function ChatComposer({
                       key={`${file.name}-${file.lastModified}-${index}`}
                       file={file}
                       onRemove={() => onRemoveAttachment(index)}
-                      error={fileErrors.get(file.name)}
+                      error={attachmentUploadStates?.get(file)?.error ?? fileErrors.get(file.name)}
+                      uploadState={attachmentUploadStates?.get(file)}
+                      onRetry={onRetryAttachmentUpload ? () => onRetryAttachmentUpload(file) : undefined}
                     />
                   ))}
                 </div>
@@ -507,18 +533,6 @@ export default function ChatComposer({
               providerLabel={providerLabel}
             />
 
-            {onSteer && (
-              <button
-                type="button"
-                onClick={() => { void onSteer(); }}
-                disabled={isSteering || !input.trim() || attachedFiles.length > 0}
-                title={t('input.steerHint', { defaultValue: 'Send text into the active task without restarting it' })}
-                className="h-10 shrink-0 rounded-lg border border-primary/30 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-40"
-              >
-                {isSteering ? t('input.steering', { defaultValue: 'Sending…' }) : t('input.steer', { defaultValue: 'Send now' })}
-              </button>
-            )}
-
             <PromptInputSubmit
               onClick={
                 canQueueDraft
@@ -536,17 +550,17 @@ export default function ChatComposer({
                       : undefined
               }
               disabled={
-                isSending ? true : isLoading
-                  ? false
+                (isSending || attachmentsPending) ? true : isLoading
+                  ? !canQueueDraft && activity?.canInterrupt === false
                   : isRecording
                     ? false
                     : isTranscribing
                       ? true
                       : !input.trim() && attachedFiles.length === 0
               }
-              aria-label={isSending ? "等待服务器接收确认" : submitAriaLabel}
-              title={isSending ? "等待服务器接收确认" : submitAriaLabel}
-              className="h-10 w-10 sm:h-10 sm:w-10"
+              aria-label={attachmentsPending ? "附件上传完成后才能发送" : isSending ? "等待服务器接收确认" : submitAriaLabel}
+              title={attachmentsPending ? "附件上传完成后才能发送" : isSending ? "等待服务器接收确认" : submitAriaLabel}
+              className="h-10 w-10 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 sm:h-10 sm:w-10"
             >
               {isTranscribing || isSending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

@@ -1,5 +1,6 @@
+import { useForkAction } from '@/modules/sidebar/hooks/useForkAction';
 import { useEffect, useRef } from 'react';
-import { Check, Edit2, GitBranch, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Check, Edit2, GitBranch, Loader2, MoreHorizontal, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu } from '@/shared/ui';
@@ -18,7 +19,7 @@ type SessionOptionsProps = {
    * which case rename is withheld rather than guessed — it is keyed by project.
    */
   projectId: string | null;
-  /** A running session cannot be deleted or forked, matching the Projects row. */
+  /** A running session cannot be deleted; its completed history remains forkable. */
   isProcessing: boolean;
   isEditing: boolean;
   renameDraft: string;
@@ -28,7 +29,7 @@ type SessionOptionsProps = {
   onSaveEditingSession: (projectId: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   onDeleteSession: (sessionId: string, sessionTitle: string) => void;
   /** Bound by the caller, which owns the session object the fork needs. */
-  onFork?: () => void;
+  onFork?: () => void | Promise<void>;
   /** Withheld where the row has nowhere to send a delete. */
   canDelete?: boolean;
   className?: string;
@@ -70,7 +71,8 @@ export default function SessionOptions({
   // Read from the backend capability matrix rather than branching on the
   // provider id here; the request is cached module-side, so every row shares one.
   const forkableProviders = useSessionForkingProviders();
-  const canFork = Boolean(onFork) && forkableProviders.has(provider) && !isProcessing;
+  const canFork = Boolean(onFork) && forkableProviders.has(provider);
+  const forkAction = useForkAction(onFork);
 
   // While editing, dismiss only when the click lands outside the rename panel,
   // matching Escape and the cancel button.
@@ -143,13 +145,14 @@ export default function SessionOptions({
         <ActionMenu
           label="Session options"
           ariaLabel={`Session options for ${sessionName}`}
-          icon={MoreHorizontal}
+          icon={forkAction.pending ? Loader2 : MoreHorizontal}
+          disabled={forkAction.pending}
           iconOnly
           portal
           variant="ghost"
           size="icon"
           onOpenChange={setOptionsOpen}
-          triggerClassName="h-7 w-7 text-muted-foreground opacity-70 hover:bg-muted hover:opacity-100"
+          triggerClassName={`h-7 w-7 text-muted-foreground opacity-70 hover:bg-muted hover:opacity-100 ${forkAction.pending ? '[&_svg]:animate-spin' : ''}`}
           menuClassName="w-[260px] rounded-xl p-1.5 shadow-xl"
           header={(
             <div className="mb-1 border-b border-border px-3 py-2">
@@ -177,10 +180,12 @@ export default function SessionOptions({
             },
             ...(canFork && onFork ? [{
               key: 'fork',
-              label: 'Fork session',
-              description: 'Continue from a copy, leaving this one untouched.',
+              label: t(forkAction.pending ? 'buttons.forkingSession' : 'buttons.forkSession'),
+              description: t('messages.forkCompletedHistory'),
+              loading: forkAction.pending,
+              disabled: forkAction.pending,
               icon: GitBranch,
-              onSelect: onFork,
+              onSelect: forkAction.run,
             }] : []),
             ...(canDelete && !isProcessing ? [{
               key: 'delete',

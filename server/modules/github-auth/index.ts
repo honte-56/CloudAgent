@@ -1,1 +1,1 @@
-export { getProjectGithubCredential, setProjectGithubCredential, rememberCloneGithubCredential, resolveProjectGithubAuthentication } from './github-auth.service.js';
+export { validateProjectGithubCredential, getProjectGithubCredential, setProjectGithubCredential, rememberCloneGithubCredential, resolveProjectGithubAuthentication } from './github-auth.service.js';

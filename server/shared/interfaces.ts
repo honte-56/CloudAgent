@@ -1,6 +1,8 @@
 import type {
   AnyRecord,
+  NativeQueuedMessage,
   BackgroundTaskSummary,
+  CliVersionProbe,
   FetchHistoryOptions,
   FetchHistoryResult,
   LLMProvider,
@@ -20,6 +22,7 @@ import type {
   UpsertProviderMcpServerInput,
   WorkflowAgentActivity,
 } from '@/shared/types.js';
+import type { ChatAttachmentDescriptor } from '@/shared/image-attachments.js';
 
 //----------------- PROVIDER CONTRACT INTERFACES ------------
 
@@ -38,7 +41,18 @@ export interface IProviderRuntime {
   ): Promise<unknown>;
   abort(sessionId: string): boolean | Promise<boolean>;
   /** Adds text to the current turn without restarting it; absent for exec-only providers. */
-  steer?(sessionId: string, content: string): Promise<void>;
+  steer?(sessionId: string, content: string, attachments?: ChatAttachmentDescriptor[]): Promise<void>;
+  /** Whether this adapter still owns an input channel for this session. */
+  canSteer?(sessionId: string): boolean;
+  /** Keeps a usable process, or releases a proven closed input before resuming the same conversation. Never retries an uncertain delivery. */
+  prepareInput?(sessionId: string): Promise<'live' | 'resume'>;
+  /** Provider-owned pending inputs; only acknowledged CLI entries appear in this list. */
+  queue?: {
+    list(sessionId: string, nativeId?: string | null): Promise<NativeQueuedMessage[]>;
+    add(sessionId: string, content: string, attachments: ChatAttachmentDescriptor[], requestId: string): Promise<NativeQueuedMessage>;
+    cancel(sessionId: string, id: string, nativeId?: string | null): Promise<boolean>;
+    sendNow(sessionId: string, id: string): Promise<void>;
+  };
   permissions?: ProviderRuntimePermissionGateway;
   /**
    * Sessions with background tasks still outstanding, whether or not their
@@ -142,6 +156,13 @@ export interface IProviderAuth {
    * Checks whether the provider is installed and has usable credentials.
    */
   getStatus(): Promise<ProviderAuthStatus>;
+  /**
+   * Runs `--version` on the CLI this provider's chats use: the same check
+   * `getStatus()` reports as `installed` and `installedVersion`, without the
+   * credential lookup (which can take seconds). The providers module's CLI
+   * update service reads versions through it.
+   */
+  checkInstalled(): CliVersionProbe;
 }
 
 // ---------------------------
@@ -234,6 +255,10 @@ export interface IProviderSessions {
    */
   rewindSession?(sessionId: string, keepThroughId: string | null): Promise<void>;
 
+  /** Task progress reads a subagent's own transcript without registering or resuming it as a main session. */
+  readSubagentActivity?(sessionId: string, agentId: string, limit?: number): Promise<WorkflowAgentActivity | null>;
+  /** Workflow task panels refresh the journal independently of the parent's history cache. */
+  readWorkflowAgents?(sessionId: string, runId: string): Promise<WorkflowAgentActivity['agent'][]>;
   /**
    * Reads what one agent of a workflow run did, from the transcript the run
    * wrote for it, with the status its journal gives it. Returns `null` when the
@@ -246,6 +271,7 @@ export interface IProviderSessions {
     sessionId: string,
     runId: string,
     agentId: string,
+    limit?: number,
   ): Promise<WorkflowAgentActivity | null>;
 }
 

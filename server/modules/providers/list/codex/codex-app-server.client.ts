@@ -43,11 +43,9 @@ export type CodexThreadFork = {
 };
 
 /**
- * Resolves the `codex` launcher shipped in node_modules.
- *
- * Deliberately not the `codex` on PATH: a machine can have a second, older
- * install, and the protocol this speaks is only guaranteed against the
- * version this package depends on.
+ * Resolves the bundled fallback when no explicit CLOUDCLI_CODEX_PATH is set.
+ * Forking uses the same configured CLI as live conversations so both agree
+ * on the persisted thread format.
  */
 function resolveCodexLauncher(): string {
   const require_ = createRequire(import.meta.url);
@@ -73,8 +71,9 @@ function resolveCodexLauncher(): string {
 async function withAppServer<T>(
   run: (call: (method: string, params: unknown) => Promise<unknown>) => Promise<T>,
 ): Promise<T> {
-  const launcher = resolveCodexLauncher();
-  const child = spawn(process.execPath, [launcher, 'app-server'], {
+  const override = process.env.CLOUDCLI_CODEX_PATH?.trim();
+  const launcher = override || resolveCodexLauncher();
+  const child = spawn(override || process.execPath, override ? ['app-server'] : [launcher, 'app-server'], {
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -167,12 +166,11 @@ async function withAppServer<T>(
     });
 
   try {
-    // `capabilities` is deliberately empty. `thread/fork` with `lastTurnId` is
-    // in the stable protocol; only `beforeTurnId` and the turn-listing methods
-    // are gated behind `experimentalApi`, and neither is needed here.
+    // Explicitly defer inherited goal continuation: creating a conversation
+    // branch must not start another worker before the user sends a message.
     await call('initialize', {
       clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1' },
-      capabilities: {},
+      capabilities: { experimentalApi: true },
     });
     child.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} })}\n`);
 
@@ -212,6 +210,7 @@ export const codexAppServer = {
     return withAppServer(async (call) => {
       const result = await call('thread/fork', {
         threadId: input.threadId,
+        deferGoalContinuation: true,
         ...(input.lastTurnId ? { lastTurnId: input.lastTurnId } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       }) as { thread?: { id?: unknown; path?: unknown } } | undefined;

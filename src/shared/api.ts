@@ -32,6 +32,12 @@ export const authenticatedFetch = (
 
   return fetch(url, {
     ...options,
+    // Every response here can carry X-Refreshed-Token or X-Auth-Error, and a
+    // served-from-cache response replays the headers it was stored with. Those
+    // headers describe one moment in one session, so they must never be reused:
+    // a stale X-Refreshed-Token overwrote the current token with an expired one
+    // on every start, which then got discarded as expired.
+    cache: 'no-store',
     headers: {
       ...defaultHeaders,
       ...options.headers,
@@ -41,12 +47,47 @@ export const authenticatedFetch = (
     if (refreshedToken) {
       storeAuthToken(refreshedToken);
     }
-    if (response.headers.get('X-Auth-Error')) {
+    // Belt and braces for any path that still reaches a cached response: only a
+    // real rejection ends the session. Note that a revalidated response surfaces
+    // its stored status (typically 200), not the 304 from the wire, so the
+    // header alone says nothing about the current request.
+    if (response.status === 401 && response.headers.get('X-Auth-Error')) {
       expireAuthSession();
     }
     return response;
   });
 };
+
+// XHR is used only for attachment bodies, where byte-level upload progress
+// and abort are needed; authentication matches authenticatedFetch.
+function uploadAttachmentChunk(body: FormData, signal: AbortSignal, onProgress: (fraction: number) => void): Promise<Record<string, any>> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const finish = () => signal.removeEventListener('abort', abort);
+    xhr.open('POST', '/api/assets/files/chunks');
+    const token = getStoredAuthToken();
+    if (!IS_PLATFORM && token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.timeout = 120_000;
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+    xhr.onload = () => {
+      finish();
+      const refreshed = xhr.getResponseHeader('X-Refreshed-Token');
+      if (refreshed) storeAuthToken(refreshed);
+      if (xhr.getResponseHeader('X-Auth-Error')) expireAuthSession();
+      let data;
+      try { data = JSON.parse(xhr.responseText); } catch { reject(new Error('Upload returned an invalid response')); return; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(typeof data.error === 'string' ? data.error : `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => { finish(); reject(new Error('Upload connection failed')); };
+    xhr.ontimeout = () => { finish(); reject(new Error('Upload timed out')); };
+    xhr.onabort = () => { finish(); reject(new DOMException('Upload cancelled', 'AbortError')); };
+    if (signal.aborted) { reject(new DOMException('Upload cancelled', 'AbortError')); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    xhr.send(body);
+  });
+}
 
 // ─── Request helpers ────────────────────────────────────────────────────────
 // Every endpoint below goes through these so verb, JSON encoding and query
@@ -120,7 +161,8 @@ export async function readApiJson<T>(response: Response): Promise<T> {
  *
  * The non-throwing counterpart of readApiJson, used by the auth and onboarding
  * screens because they show their own localized message when the server gives
- * none.
+ * none, and by the plugins context for failed plugin list, install, update,
+ * uninstall and toggle calls, which all answer with the structured envelope.
  */
 export function readApiErrorMessage(body: unknown): string | null {
   if (!body || typeof body !== 'object') {
@@ -156,6 +198,38 @@ const put = withBody('PUT');
 const patch = withBody('PATCH');
 const del = withBody('DELETE');
 
+// Bound queue delivery and usage queries even if headers or the response body
+// stall. Aborting HTTP never interrupts the agent.
+async function queueRequest(
+  url: string,
+  options: ApiRequestOptions,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await authenticatedFetch(url, { ...options, signal: controller.signal });
+        const body = await response.text();
+        return new Response([204, 205, 304].includes(response.status) ? null : body, {
+          status: response.status, headers: response.headers,
+        });
+      })(),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ─── URL builders ───────────────────────────────────────────────────────────
 // Exported for the consumers that cannot go through `authenticatedFetch`:
 // `EventSource` and `XMLHttpRequest` need a bare URL.
@@ -167,12 +241,12 @@ const del = withBody('DELETE');
  */
 export const sessionMessagesUrl = (
   sessionId: string,
-  { limit = null, offset = 0 }: { limit?: number | null; offset?: number } = {},
+  { limit = null, offset = 0, before }: { limit?: number | null; offset?: number; before?: string } = {},
 ): string => {
   const base = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
   return limit === null || limit === undefined
     ? base
-    : `${base}${query({ limit, offset: offset ?? 0 })}`;
+    : `${base}${query({ limit, ...(before ? { before } : { offset: offset ?? 0 }) })}`;
 };
 
 const fileContentPath = (projectId: string, filePath: string) =>
@@ -230,6 +304,7 @@ export const api = {
   // After the projectName → projectId migration the path/query identifier is
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
   projects: () => get('/api/projects'),
+  updateProjectSettings: (projectId: string, settings: { displayName: string; path: string; credentialId: number | null }) => put(`/api/projects/${encodeURIComponent(projectId)}/settings`, settings),
   projectGithubCredential: (projectId: string) => get(`/api/projects/${encodeURIComponent(projectId)}/github-credential`),
   setProjectGithubCredential: (projectId: string, credentialId: number | null) => put(`/api/projects/${encodeURIComponent(projectId)}/github-credential`, { credentialId }),
   archivedProjects: () => get('/api/projects/archived'),
@@ -432,14 +507,34 @@ export const api = {
 
   // Provider (coding agent) endpoints — models, capabilities, sessions, MCP, skills.
   providers: {
+    taskProgress: (sessionId: string, toolUseId: string, paging: { agentId?: string; limit?: number } = {}, options: ApiRequestOptions = {}) =>
+      get(`/api/providers/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(toolUseId)}/progress${query(paging)}`, options),
+    nativeQueue: (sessionId: string) => queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/queue`, {}, 10_000, '读取原生队列超时。'),
+    enqueueNativeMessage: (sessionId: string, content: string, attachments: unknown[], requestId: string) =>
+      queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/queue`, { method: 'POST', body: JSON.stringify({ content, attachments, requestId }) }, 35_000, 'CLI 入队确认超时，请先检查队列，避免重复发送。'),
+    deleteNativeQueuedMessage: (sessionId: string, id: string) =>
+      queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(id)}`, { method: 'DELETE' }, 10_000, '删除确认超时，请检查队列。'),
+    sendNativeQueuedMessage: (sessionId: string, id: string) =>
+      queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(id)}/send`, { method: 'POST' }, 35_000, '发送确认超时，请检查会话记录。'),
+    sessionExecution: (sessionId: string) => get(`/api/providers/sessions/${encodeURIComponent(sessionId)}/execution`),
+    releaseSessionExecution: (sessionId: string, ownerId: string) =>
+      queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/execution/release`, {
+        method: 'POST', body: JSON.stringify({ ownerId }),
+      }, 15_000, 'Session takeover is still waiting for the previous process to exit.'),
     // Resolves only after the active runtime acknowledges the additional text.
-    steerSession: (sessionId: string, content: string) =>
-      post(`/api/providers/sessions/${encodeURIComponent(sessionId)}/steer`, { content }),
+    steerSession: (sessionId: string, content: string, attachments: unknown[] = [], queued = false) =>
+      queueRequest(`/api/providers/sessions/${encodeURIComponent(sessionId)}/steer`, {
+        method: 'POST', body: JSON.stringify({ content, attachments, queued }),
+      }, 35_000, '发送确认超时。消息可能已经送达，请先查看会话记录，避免重复发送。'),
     capabilities: () => get('/api/providers/capabilities'),
     authStatus: (provider: string) =>
       get(`/api/providers/${encodeURIComponent(provider)}/auth/status`),
-    planUsage: (provider: string) =>
-      get(`/api/providers/${encodeURIComponent(provider)}/plan-usage`),
+    planUsage: (provider: string, forceRefresh = false) =>
+      queueRequest(`/api/providers/${encodeURIComponent(provider)}/plan-usage${forceRefresh ? '?refresh=true' : ''}`, { cache: 'no-store' }, 25_000, 'Usage query timed out. Please retry.'),
+    cliStatus: (provider: string) =>
+      get(`/api/providers/${encodeURIComponent(provider)}/cli`),
+    updateCli: (provider: string) =>
+      post(`/api/providers/${encodeURIComponent(provider)}/cli/update`),
     claudeSettingsPermissions: () => get('/api/providers/claude/settings-permissions'),
 
     models: (provider: string) => get(`/api/providers/${provider}/models`),
@@ -449,6 +544,8 @@ export const api = {
       patch(`/api/providers/${provider}/models/${recordId}`, input),
     deleteModel: (provider: string, recordId: string | number) =>
       del(`/api/providers/${provider}/models/${recordId}`),
+    setCustomModelsOnly: (provider: string, enabled: boolean) =>
+      put(`/api/providers/${provider}/models/custom-only`, { enabled }),
 
     createSession: (payload: {
       provider: string;
@@ -457,7 +554,7 @@ export const api = {
     }) => post('/api/providers/sessions', payload),
     sessionMessages: (
       sessionId: string,
-      pagination: { limit?: number | null; offset?: number } = {},
+      pagination: { limit?: number | null; offset?: number; before?: string } = {},
       options: ApiRequestOptions = {},
     ) => get(sessionMessagesUrl(sessionId, pagination), options),
     sessionTokenUsage: (sessionId: string) =>
@@ -505,6 +602,21 @@ export const api = {
 
   // Chat attachments, stored globally under ~/.cloudcli/assets
   assets: {
+    cancelUpload: (uploadId: string) => del(`/api/assets/files/uploads/${encodeURIComponent(uploadId)}`),
+    uploadAttachment: async (file: File, uploadId: string, signal: AbortSignal, onProgress: (progress: number) => void) => {
+      if (file.size > 100 * 1024 * 1024) throw new Error('File too large (max 100MB)');
+      const count = Math.max(1, Math.ceil(file.size / ATTACHMENT_CHUNK_SIZE));
+      for (let index = 0; index < count; index++) {
+        const chunk = new FormData();
+        for (const [key, value] of Object.entries({ uploadId, index, totalSize: file.size, name: file.name, mimeType: file.type || 'application/octet-stream', managed: true })) chunk.append(key, String(value));
+        const start = index * ATTACHMENT_CHUNK_SIZE;
+        const bytes = file.slice(start, start + ATTACHMENT_CHUNK_SIZE);
+        chunk.append('chunk', bytes, 'chunk');
+        const result = await uploadAttachmentChunk(chunk, signal, fraction => onProgress(Math.min(99, (start + bytes.size * fraction) / Math.max(1, file.size) * 100)));
+        if (result.attachments?.length === 1) { onProgress(100); return result.attachments[0]; }
+      }
+      throw new Error('Upload returned an incomplete result');
+    },
     uploadFiles: async (formData: FormData): Promise<Response> => {
       const files = formData.getAll('files').filter((entry): entry is File => entry instanceof File);
       if (files.some(file => file.size > 100 * 1024 * 1024)) {
@@ -573,10 +685,12 @@ export const api = {
     preferences: () => get('/api/user/preferences'),
     savePreferences: (updates: Record<string, unknown>) =>
       patch('/api/user/preferences', updates),
-    drafts: () => get('/api/user/drafts'),
+    drafts: () => queueRequest('/api/user/drafts', {}, 10_000, '读取排队状态超时，请检查连接。'),
     saveDraft: (scope: string, draft: { text: string; queuedMessage?: unknown }) =>
-      put('/api/user/drafts', { scope, ...draft }),
-    deleteDraft: (scope: string) => del('/api/user/drafts', { scope }),
+      queueRequest('/api/user/drafts', { method: 'PUT', body: JSON.stringify({ scope, ...draft }) },
+        10_000, '草稿保存确认超时，请检查会话记录后重试。'),
+    deleteDraft: (scope: string) => queueRequest('/api/user/drafts', { method: 'DELETE', body: JSON.stringify({ scope }) },
+      10_000, '取消排队确认超时，请检查连接和会话记录。'),
   },
 
   // Server-side settings: API keys, stored credentials, notifications, web push
@@ -607,6 +721,18 @@ export const api = {
       subscribe: (subscription: { endpoint?: string; keys?: unknown }) =>
         post('/api/settings/push/subscribe', subscription),
       unsubscribe: (endpoint: string) => post('/api/settings/push/unsubscribe', { endpoint }),
+    },
+
+    // Outbound webhook for run lifecycle events. `createSecret` is the only
+    // response that ever carries the signing secret.
+    notificationWebhook: {
+      get: () => get('/api/notifications/webhook'),
+      save: (config: { url: string; allowHttp: boolean; enabled: boolean }) =>
+        put('/api/notifications/webhook', config),
+      remove: () => del('/api/notifications/webhook'),
+      createSecret: () => post('/api/notifications/webhook/secret'),
+      removeSecret: () => del('/api/notifications/webhook/secret'),
+      sendTest: () => post('/api/notifications/webhook/test'),
     },
   },
 
@@ -639,6 +765,7 @@ export const api = {
     sessions: () => get('/api/browser-use/sessions'),
     stopSession: (sessionId: string) => post(`/api/browser-use/sessions/${sessionId}/stop`),
     deleteSession: (sessionId: string) => del(`/api/browser-use/sessions/${sessionId}`),
+    sendInput: (sessionId: string, input: unknown) => post(`/api/browser-use/sessions/${sessionId}/input`, input),
     installRuntime: () => post('/api/browser-use/runtime/install'),
   },
 

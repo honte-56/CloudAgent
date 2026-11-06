@@ -165,3 +165,35 @@ test('a retained run\'s eviction timer cannot evict the session\'s next run earl
     mock.timers.reset();
   }
 });
+
+test('a fresh subscriber receives the complete stream snapshot before any later suffix',async()=>{
+ await withIsolatedDatabase(async()=>{
+  const oldTab=createFakeSocket();
+  const run=chatRunRegistry.startRun({appSessionId:SESSION_ID,provider:'claude',providerSessionId:'native-1',connection:oldTab as never,userId:1})!;
+  run.writer.send({kind:'stream_delta',messageKey:'answer',id:'answer',content:'hello ',provider:'claude'});
+  run.writer.flush();
+  run.writer.send({kind:'stream_delta',messageKey:'answer',id:'answer',content:'world',provider:'claude'});
+  const newTab=createFakeSocket();
+  handleChatConnection(newTab as never,{user:{id:1}} as never,{runtime:{hasBackgroundWork:()=>false,getPendingApprovalsForSession:()=>[]} as never});
+  newTab.emit('message',JSON.stringify({type:'chat.subscribe',sessions:[{sessionId:SESSION_ID,lastSeq:0}]}));
+  await settle();
+  const stream=newTab.frames.filter(frame=>frame.kind==='stream_delta');
+  assert.equal(newTab.frames[0].kind,'chat_subscribed');
+  assert.equal(stream.length,1);assert.equal(stream[0].content,'hello world');assert.equal(stream[0].streamSnapshot,true);
+ });
+});
+
+test('reconnect filters malformed legacy subagent tool frames while retaining real failed commands',async()=>{
+ await withIsolatedDatabase(async()=>{
+  const id='codex-lifecycle';sessionsDb.createAppSession(id,'codex','/tmp');
+  const run=chatRunRegistry.startRun({appSessionId:id,provider:'codex',providerSessionId:null,connection:createFakeSocket() as never,userId:1})!;
+  run.writer.send({kind:'tool_use',provider:'codex',id:'old-signal',toolId:'old-signal',toolName:'subAgentActivity'});
+  run.writer.send({kind:'tool_use',provider:'codex',id:'real-command',toolId:'real-command',toolName:'Bash'});
+  run.writer.send({kind:'tool_result',provider:'codex',id:'real-result',toolId:'real-command',isError:true,content:'test failed'});
+  const tab=createFakeSocket();handleChatConnection(tab as never,{user:{id:1}} as never,{runtime:{hasBackgroundWork:()=>false,getPendingApprovalsForSession:()=>[]} as never});
+  tab.emit('message',JSON.stringify({type:'chat.subscribe',sessions:[{sessionId:id,lastSeq:0}]}));
+  await settle();
+  assert(!tab.frames.some(frame=>frame.toolName==='subAgentActivity'));
+  assert(tab.frames.some(frame=>frame.toolId==='real-command'&&frame.isError===true));
+ });
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,9 +11,11 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import providerRouter from '@/modules/providers/provider.routes.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import { sessionExecutionService } from '@/modules/providers/services/session-execution.service.js';
+import { providerPlanUsageService } from '@/modules/providers/services/provider-plan-usage.service.js';
 import type { IProvider, IProviderRuntime } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary, WorkflowAgentActivity } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, IS_PLATFORM } from '@/shared/utils.js';
 
 async function withProviderServer(
   run: (baseUrl: string, workspacePath: string) => Promise<void>,
@@ -56,6 +58,19 @@ async function withProviderServer(
     await rm(tempDirectory, { recursive: true, force: true });
   }
 }
+
+test('usage route bypasses cache only for an explicit refresh request', async (t) => {
+  const getUsage = t.mock.method(providerPlanUsageService, 'getPlanUsage', async () => ({ status: 'ok', windows: [] }));
+  await withProviderServer(async baseUrl => {
+    for (const suffix of ['', '?refresh=false', '?refresh=true']) {
+      const response = await fetch(`${baseUrl}/api/providers/claude/plan-usage${suffix}`);
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(getUsage.mock.calls.map(call => call.arguments), [
+      ['claude', { forceRefresh: false }], ['claude', { forceRefresh: false }], ['claude', { forceRefresh: true }],
+    ]);
+  });
+});
 
 test('steering route rejects invalid text before invoking the runtime', async (t) => {
   await withProviderServer(async (baseUrl, workspacePath) => {
@@ -297,6 +312,75 @@ test('model routes expose immutable defaults and full custom model CRUD', async 
   });
 });
 
+test('the custom-only route restricts a provider catalog to its custom models', async () => {
+  await withProviderServer(async (baseUrl) => {
+    type Catalog = {
+      OPTIONS: Array<{ value: string; isCustom: boolean }>;
+      DEFAULT: string;
+      CUSTOM_MODELS_ONLY?: boolean;
+    };
+    const readCatalog = async (provider: string): Promise<Catalog> => {
+      const response = await fetch(`${baseUrl}/api/providers/${provider}/models`);
+      return (await response.json() as { data: { models: Catalog } }).data.models;
+    };
+    const putCustomOnly = async (provider: string, body: unknown) => {
+      const response = await fetch(`${baseUrl}/api/providers/${provider}/models/custom-only`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: response.status,
+        payload: await response.json() as {
+          data?: { provider: string; models: Catalog };
+          error?: { code: string };
+        },
+      };
+    };
+
+    const builtIn = await readCatalog('codex');
+    assert.equal(builtIn.CUSTOM_MODELS_ONLY, false);
+    assert.ok(builtIn.OPTIONS.length > 0);
+
+    for (const [model, id] of [['Gateway One', 'gateway/one'], ['Gateway Two', 'gateway/two']]) {
+      const created = await fetch(`${baseUrl}/api/providers/codex/models`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, id }),
+      });
+      assert.equal(created.status, 201);
+    }
+
+    const enabled = await putCustomOnly('codex', { enabled: true });
+    assert.equal(enabled.status, 200);
+    assert.equal(enabled.payload.data?.provider, 'codex');
+    assert.deepEqual(
+      enabled.payload.data?.models.OPTIONS.map((option) => option.value),
+      ['gateway/one', 'gateway/two'],
+    );
+    assert.equal(enabled.payload.data?.models.DEFAULT, 'gateway/one');
+    assert.equal(enabled.payload.data?.models.CUSTOM_MODELS_ONLY, true);
+    // Persisted, and scoped to the one provider.
+    assert.deepEqual(await readCatalog('codex'), enabled.payload.data?.models);
+    assert.equal((await readCatalog('cursor')).CUSTOM_MODELS_ONLY, false);
+
+    for (const invalid of [{}, { enabled: 'true' }, { enabled: 1 }, []]) {
+      const rejected = await putCustomOnly('codex', invalid);
+      assert.equal(rejected.status, 400, JSON.stringify(invalid));
+      assert.equal(rejected.payload.error?.code, 'INVALID_CUSTOM_MODELS_ONLY');
+    }
+    assert.equal((await readCatalog('codex')).CUSTOM_MODELS_ONLY, true);
+
+    const disabled = await putCustomOnly('codex', { enabled: false });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.payload.data?.models.DEFAULT, builtIn.DEFAULT);
+    assert.equal(
+      disabled.payload.data?.models.OPTIONS.length,
+      builtIn.OPTIONS.length + 2,
+    );
+  });
+});
+
 test('custom model routes accept, validate, and return reasoning-effort levels', async () => {
   await withProviderServer(async (baseUrl) => {
     const postModel = async (provider: string, body: unknown) => {
@@ -423,12 +507,68 @@ test('the running-sessions route reports a session held open for background work
         startedAt: 1_700_000_000_000,
         lastSeq: 0,
         background: true,
-        canInterrupt: false,
+        canInterrupt: true,
         tasks,
       }]);
     });
   } finally {
     providerRegistry.listProviders = realListProviders;
+  }
+});
+
+test('the CLI update route refuses while that provider is busy in a session', {
+  skip: IS_PLATFORM ? 'platform mode refuses every CLI update before the busy check' : false,
+}, async () => {
+  // A session held open for background work counts as busy, like a running
+  // chat: replacing the CLI under it could break the work it is still doing.
+  const realListProviders = providerRegistry.listProviders;
+  providerRegistry.listProviders = () => [{
+    id: 'claude',
+    runtime: { listBackgroundWork: () => [{ sessionId: 'held-session', tasks: [] }] },
+  } as unknown as IProvider];
+
+  // The route runs the real service, so the CLI it would update is a stub that
+  // only logs its calls: if the busy guard ever broke, this test must not run
+  // `claude update` on the developer's own install.
+  const cliDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-routes-cli-'));
+  const callLog = path.join(cliDirectory, 'calls.log');
+  const stubPath = path.join(cliDirectory, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  await writeFile(callLog, '');
+  await writeFile(
+    stubPath,
+    process.platform === 'win32'
+      ? `@echo off\r\necho %* >> "${callLog}"\r\necho 2.1.200 (Claude Code)\r\n`
+      : `#!/bin/sh\necho "$*" >> "${callLog}"\necho "2.1.200 (Claude Code)"\n`,
+  );
+  await chmod(stubPath, 0o755);
+  const previousCliPath = process.env.CLAUDE_CLI_PATH;
+  process.env.CLAUDE_CLI_PATH = stubPath;
+
+  try {
+    await withProviderServer(async (baseUrl) => {
+      const busy = await fetch(`${baseUrl}/api/providers/claude/cli/update`, { method: 'POST' });
+      const busyPayload = await busy.json() as { error: { code: string } };
+      assert.equal(busy.status, 409);
+      assert.equal(busyPayload.error.code, 'PROVIDER_CLI_BUSY');
+      assert.equal(await readFile(callLog, 'utf8'), '', 'a refused update never runs the CLI');
+
+      // Codex ships with CloudCLI: nothing to update, and the status says why.
+      const codex = await fetch(`${baseUrl}/api/providers/codex/cli/update`, { method: 'POST' });
+      assert.equal(codex.status, 400);
+      const codexStatus = await fetch(`${baseUrl}/api/providers/codex/cli`);
+      const codexPayload = await codexStatus.json() as { data: { updateUnavailableReason: string; updateCommand: null } };
+      assert.equal(codexStatus.status, 200);
+      assert.equal(codexPayload.data.updateUnavailableReason, 'bundled');
+      assert.equal(codexPayload.data.updateCommand, null);
+    });
+  } finally {
+    providerRegistry.listProviders = realListProviders;
+    if (previousCliPath === undefined) {
+      delete process.env.CLAUDE_CLI_PATH;
+    } else {
+      process.env.CLAUDE_CLI_PATH = previousCliPath;
+    }
+    await rm(cliDirectory, { recursive: true, force: true });
   }
 });
 
@@ -520,5 +660,34 @@ test('the workflow agent route reads an agent\'s timeline and status from its ru
     const missing = await missingResponse.json() as { error: { code: string } };
     assert.equal(missingResponse.status, 404);
     assert.equal(missing.error.code, 'WORKFLOW_AGENT_NOT_FOUND');
+  });
+});
+
+
+test('execution takeover validates the owner and acknowledges only confirmed process exit', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    sessionsDb.createAppSession('owned-session', 'claude', workspacePath);
+    let stopped!: () => void;
+    const stopping = new Promise<void>(resolve => { stopped = resolve; });
+    let stops = 0;
+    const lease = sessionExecutionService.claim({ sessionId: 'owned-session', provider: 'claude', kind: 'terminal', stop() { stops++; stopped(); } });
+    const endpoint = `${baseUrl}/api/providers/sessions/owned-session/execution`;
+    const post = (ownerId: unknown) => fetch(`${endpoint}/release`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ownerId }) });
+    try {
+      assert.equal(((await (await fetch(endpoint)).json()) as { data: { owner: { id: string } } }).data.owner.id, lease.owner.id);
+      assert.equal((await post('')).status, 400);
+      assert.equal((await post('stale-owner')).status, 409);
+      assert.equal(stops, 0);
+      let answered = false;
+      const pending = post(lease.owner.id).then(response => { answered = true; return response; });
+      await stopping;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(answered, false);
+      assert.equal(sessionExecutionService.get('owned-session')?.stopping, true);
+      lease.release();
+      assert.equal((await pending).status, 200);
+      assert.equal(stops, 1);
+      assert.equal(((await (await fetch(endpoint)).json()) as { data: { owner: null } }).data.owner, null);
+    } finally { lease.release(); }
   });
 });

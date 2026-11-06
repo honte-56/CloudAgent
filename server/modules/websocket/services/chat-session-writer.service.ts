@@ -83,6 +83,20 @@ export class ChatSessionWriter {
     this.providerSessionId = options.providerSessionId;
   }
 
+  private pendingDeltas = new Map<string, NormalizedMessage>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Flushes batched text before control events or a reconnect snapshot. */
+  flush(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    for (const [key, message] of this.pendingDeltas) {
+      const outbound = this.options.decorateOutboundEvent(message);
+      this.pendingDeltas.delete(key);
+      if (outbound) this.forward(outbound);
+    }
+  }
+
   send(data: unknown): void {
     const record = readObjectRecord(data);
     if (!record || typeof record.kind !== 'string') {
@@ -94,6 +108,21 @@ export class ChatSessionWriter {
     }
 
     const message = record as NormalizedMessage;
+    if (message.kind === 'stream_delta' && message.messageKey) {
+      const previous = this.pendingDeltas.get(message.messageKey);
+      this.pendingDeltas.set(message.messageKey, { ...message,
+        timestamp: previous?.timestamp ?? message.timestamp,
+        content: message.streamSnapshot ? message.content : (previous?.content ?? '') + (message.content ?? '') });
+      if (!this.flushTimer) this.flushTimer = setTimeout(() => {
+        try { this.flush(); } catch (error) {
+          // Keep undelivered fragments for the next flush. A journal failure
+          // must not become an unhandled timer exception that kills all runs.
+          console.error('[ChatSessionWriter] Stream flush failed:', error);
+        }
+      }, 50);
+      return;
+    }
+    this.flush();
 
     if (message.kind === 'session_created') {
       const announcedId =
@@ -119,6 +148,7 @@ export class ChatSessionWriter {
    * (runtime crash before completing, or user abort).
    */
   sendComplete(opts: { exitCode: number; aborted?: boolean }): void {
+    this.flush();
     const message = createCompleteMessage({
       provider: this.options.provider,
       sessionId: this.providerSessionId,
@@ -153,8 +183,8 @@ export class ChatSessionWriter {
       return;
     }
 
-    this.providerSessionId = providerSessionId;
     this.options.onProviderSessionId(providerSessionId);
+    this.providerSessionId = providerSessionId;
   }
 
   private forward(message: NormalizedMessage): void {
@@ -166,7 +196,7 @@ export class ChatSessionWriter {
     // for a Set — the removed entry is simply not revisited.
     for (const connection of this.connections) {
       if (connection.readyState === WS_OPEN_STATE) {
-        connection.send(payload);
+        try { connection.send(payload); } catch { this.connections.delete(connection); }
       } else {
         this.connections.delete(connection);
       }

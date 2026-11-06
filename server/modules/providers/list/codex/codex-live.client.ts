@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
-import type { AnyRecord } from '@/shared/types.js';
+import type { AnyRecord, CodexServerRequestHandler } from '@/shared/index.js';
 
 type PendingCall = {
   resolve: (result: AnyRecord) => void;
@@ -10,7 +10,7 @@ type PendingCall = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-/** Used by Codex's live runtime to own one app-server connection per active run. */
+/** Used by Codex's live runtime and quota reader to own an app-server connection for their operation. */
 export class CodexLiveClient {
   private child: ChildProcessWithoutNullStreams;
   private pending = new Map<number, PendingCall>();
@@ -24,6 +24,7 @@ export class CodexLiveClient {
     private onFailure: (error: Error) => void,
     launcher?: string,
     environment: NodeJS.ProcessEnv = process.env,
+    private onRequest?: CodexServerRequestHandler,
   ) {
     const pathOverride = !launcher ? process.env.CLOUDCLI_CODEX_PATH?.trim() : undefined;
     this.child = spawn(pathOverride || process.execPath, pathOverride
@@ -38,9 +39,18 @@ export class CodexLiveClient {
     this.reader.on('line', (line) => {
       let message: AnyRecord;
       try { message = JSON.parse(line); } catch { return; }
-      // Server requests must be answered, never silently granted. Interactive
-      // approvals are not exposed by the existing exec adapter either.
+      // User-input requests stay open until the user answers. Unknown methods
+      // and approvals still use explicit rejection, never automatic consent.
       if (message.method && message.id !== undefined) {
+        let answered = false;
+        const reply = (result: AnyRecord) => {
+          if (answered) return;
+          this.write({ id: message.id, result });
+          answered = true;
+        };
+        try {
+          if (this.onRequest?.(message.method, message.params || {}, reply, message.id)) return;
+        } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); return; }
         const result = message.method.endsWith('/requestApproval') ? { decision: 'decline' } : null;
         this.write(result ? { id: message.id, result } : {
           id: message.id, error: { code: -32601, message: 'CloudCLI does not support this interactive request.' },
@@ -65,7 +75,7 @@ export class CodexLiveClient {
   }
 
   async initialize(): Promise<void> {
-    await this.call('initialize', { clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1.37.4' } });
+    await this.call('initialize', { clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1.37.4' }, capabilities: { experimentalApi: true } });
     this.write({ method: 'initialized', params: {} });
   }
 

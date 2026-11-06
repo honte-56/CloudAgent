@@ -1,3 +1,4 @@
+import { stripRuntimeInstructions } from '@/shared/utils';
 import type { NormalizedMessage } from '@/shared/types';
 
 const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
@@ -13,7 +14,8 @@ type UserTurnFingerprint = {
 function userTurnFingerprint(message: NormalizedMessage): UserTurnFingerprint | null {
   if (message.kind !== 'text' || message.role !== 'user') return null;
 
-  const text = (message.content || '').trim();
+  const content = message.content || '';
+  const text = (message.id.startsWith('local_') || message.runtimeContextStripped ? content : stripRuntimeInstructions(content)).trim();
   const imageCount = Array.isArray(message.images) ? message.images.length : 0;
   const fileCount = Array.isArray(message.files) ? message.files.length : 0;
   if (!text && imageCount === 0 && fileCount === 0) return null;

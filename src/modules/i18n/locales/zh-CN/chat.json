@@ -9,7 +9,9 @@
     "copied": "消息已复制",
     "selectFormat": "选择复制格式",
     "copyAsMarkdown": "复制为 Markdown",
-    "copyAsText": "复制为纯文本"
+    "copyAsText": "复制为纯文本",
+    "downloadAsText": "下载为 TXT",
+    "downloadAsMarkdown": "下载为 Markdown"
   },
   "messageTypes": {
     "user": "U",
@@ -75,6 +77,12 @@
   "json": {
     "response": "JSON 响应"
   },
+  "agentPrompts": {
+    "needsInput": "{{agent}} 需要你的输入",
+    "dismiss": "拒绝",
+    "alwaysAllow": "始终允许",
+    "alwaysAllowCovers": "“始终允许”适用于"
+  },
   "permissions": {
     "grant": "授予 {{tool}} 权限",
     "added": "权限已添加",
@@ -98,14 +106,14 @@
     "permissionMode": "权限模式",
     "modes": {
       "default": "默认模式",
-      "auto": "Auto Mode",
+      "auto": "自动模式",
       "acceptEdits": "编辑模式",
       "bypassPermissions": "无限制模式",
       "plan": "计划模式"
     },
     "descriptions": {
       "default": "只有受信任的命令（ls、cat、grep、git status 等）自动运行。其他命令将被跳过。可以写入工作区。",
-      "auto": "A model classifier decides per tool call whether to approve or deny. Hands-off, but safer than Bypass — denials still happen.",
+      "auto": "由模型分类器针对每次工具调用决定批准或拒绝。无需手动操作，但比无限制模式更安全——仍可能被拒绝。",
       "acceptEdits": "工作区内的所有命令自动运行。完全自动模式，具有沙盒执行功能。",
       "bypassPermissions": "完全的系统访问，无限制。所有命令自动运行，具有完整的磁盘和网络访问权限。请谨慎使用。",
       "plan": "计划模式 - 不执行任何命令"
@@ -121,6 +129,7 @@
     "loading": "加载中…"
   },
   "input": {
+    "newMessages": "有新消息",
     "placeholder": "输入 / 调用命令，@ 选择文件，或向 {{provider}} 提问...",
     "placeholderDefault": "输入您的消息...",
     "disabled": "输入已禁用",
@@ -167,7 +176,8 @@
       "opencode": "准备好使用带有 {{model}} 的 OpenCode。请在下方开始输入您的消息。",
       "default": "请在上方选择一个提供者以开始"
     },
-    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交"
+    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜索会话、文件和提交",
+    "chooseModelDescriptionCustomOnly": "{{providers, list}} 仅列出您的模型"
   },
   "session": {
     "continue": {
@@ -186,7 +196,8 @@
       "loadAll": "加载全部消息",
       "loadingAll": "正在加载全部消息...",
       "allLoaded": "全部消息已加载",
-      "perfWarning": "已加载全部消息 - 滚动可能变慢。点击「滚动到底部」恢复性能。"
+      "perfWarning": "已加载全部消息 - 滚动可能变慢。点击「滚动到底部」恢复性能。",
+      "loaded": "已加载 {{count}} 条消息"
     }
   },
   "shell": {
@@ -256,9 +267,16 @@
   "message": {
     "editAndResend": "编辑并重新发送",
     "forkFromHere": "从此处派生",
-    "answeredBy": "由 {{model}} 回答"
+    "answeredBy": "由 {{model}} 回答",
+    "forkFromTurn": "从此轮完整回复创建分支",
+    "forkNotReady": "等待回复完成或历史记录加载后可创建分支",
+    "forking": "正在创建分支…",
+    "forkFailed": "创建分支失败："
   },
   "composer": {
+    "permissionHeading": "如何批准 {{provider}} 的操作？",
+    "permissionCycleHint": "在输入框中按 Tab 切换模式",
+    "permissionTriggerLabel": "{{mode}}：{{heading}}",
     "editing": {
       "title": "正在替换先前的消息",
       "filesNotReverted": "已修改的文件不会被还原",
@@ -301,7 +319,11 @@
   "modelLibrary": {
     "effortLevels": "推理级别",
     "effortLevelsHint": "选择此模型支持的推理强度级别。若未选择任何级别，将无法在输入框中为此模型选择级别。",
-    "effortSummary": "推理：{{levels}}"
+    "effortSummary": "推理：{{levels}}",
+    "customModelsOnly": "仅使用我的模型",
+    "customModelsOnlyHint": "在所有模型选择器中隐藏 {{provider}} 的内置模型，并将您的第一个模型设为默认模型。在您添加模型之前，内置模型仍会显示。",
+    "builtInModelsHidden": "开启“仅使用我的模型”时，这些模型不会出现在模型选择器中。",
+    "customModelsOnlyFailed": "无法更改此设置。"
   },
   "planUsage": {
     "title": "套餐用量",
@@ -326,9 +348,15 @@
     "windowReset": "额度窗口已重置",
     "credits": "积分余额:{{balance}}",
     "creditsUnlimited": "积分:不限量",
+    "updatedFromCodexCli": "通过 Codex 查询，{{duration}}",
+    "cachedFallback": "实时查询失败，当前显示最近会话记录的旧数据。可再次刷新。",
+    "updatedFromCli": "通过 Claude Code 查询，{{duration}}",
+    "justNow": "刚刚",
+    "ago": "{{duration}}前",
     "updatedLive": "刚刚更新",
-    "updatedFromSession": "来自最近一次 Codex 会话,{{duration}}前",
+    "updatedFromSession": "来自最近一次 Codex 会话,{{duration}}",
     "status": {
+      "timeout": "用量查询超时，请重试。",
       "unauthenticated": "服务器上未找到订阅登录信息。",
       "token-expired": "登录已过期,请在终端中运行一次对应的 CLI 以刷新。",
       "unsupported": "暂无套餐用量数据。",

@@ -33,7 +33,7 @@ test('a background-only entry is busy but not processing', () => {
 
   const activity = result.current.getSessionActivity('session-1');
   assert.equal(activity?.background, true);
-  assert.equal(activity?.canInterrupt, false);
+  assert.equal(activity?.canInterrupt, true);
   assert.deepEqual(activity?.tasks, [task({ startedAt: activity?.startedAt })]);
   assert.equal(result.current.isSessionProcessing('session-1'), false, 'no response is being produced');
   assert.ok(result.current.processingSessions.has('session-1'), 'but the session counts as busy');
@@ -130,4 +130,17 @@ test('a poll that changes what it says about a listed task is not dropped as a r
   const listed = result.current.getSessionActivity('session-1')?.tasks?.[0];
   assert.equal(listed?.nested, true);
   assert.equal(listed?.description, 'Audit the whole frontend');
+});
+
+
+test('a duplicate external CLI fallback cannot erase owned background work', () => {
+  const { result } = renderHook(() => useSessionProtection());
+  const monitor = task();
+  act(() => result.current.syncProcessingSessions([
+    { sessionId: 'session-1', background: true, canInterrupt: true, tasks: [monitor] },
+    { sessionId: 'session-1', canInterrupt: false, statusText: 'Running in the Claude CLI' },
+  ]));
+  assert.equal(result.current.isSessionProcessing('session-1'), false);
+  assert.equal(result.current.getSessionActivity('session-1')?.canInterrupt, true);
+  assert.deepEqual(result.current.getSessionActivity('session-1')?.tasks, [monitor]);
 });

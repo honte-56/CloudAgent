@@ -1,3 +1,4 @@
+import { updateProjectSettings } from '@/modules/projects/services/project-settings.service.js';
 import express from 'express';
 import { getProjectGithubCredential, setProjectGithubCredential } from '@/modules/github-auth/index.js';
 import { AppError, asyncHandler } from '@/shared/index.js';
@@ -22,6 +23,15 @@ export function createProjectGithubCredentialRouter() {
     const projectId = String(req.params.projectId);
     setProjectGithubCredential(id, projectId, credentialId);
     res.json(getProjectGithubCredential(id, projectId));
+  }));
+  router.put('/:projectId/settings', asyncHandler(async (req, res) => {
+    const { displayName, path, credentialId } = req.body ?? {};
+    if (typeof displayName !== 'string' || typeof path !== 'string' || !path.trim()
+      || (credentialId !== null && (!Number.isSafeInteger(credentialId) || credentialId <= 0))) {
+      throw new AppError('Invalid project settings', { code: 'INVALID_PROJECT_SETTINGS', statusCode: 400 });
+    }
+    const project = await updateProjectSettings({ userId: userId(req), projectId: String(req.params.projectId), displayName, projectPath: path, credentialId });
+    res.json({ success: true, project });
   }));
   return router;
 }

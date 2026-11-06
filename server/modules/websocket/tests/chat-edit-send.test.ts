@@ -77,8 +77,13 @@ async function withGateway(
   runTest: (context: {
     socket: ReturnType<typeof createFakeSocket>;
     runs: RunCall[];
+    steers: Array<{ sessionId: string; content: string; attachments: unknown[] }>;
   }) => Promise<void>,
   rows: unknown[] = TRANSCRIPT_ROWS,
+  background = false,
+  inputMode: 'live' | 'resume' = 'live',
+  inputOpen = false,
+  ownershipConflict = false,
 ): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'chat-edit-send-'));
@@ -87,9 +92,11 @@ async function withGateway(
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   const runs: RunCall[] = [];
+  const steers: Array<{ sessionId: string; content: string; attachments: unknown[] }> = [];
   const socket = createFakeSocket();
 
   try {
@@ -102,6 +109,11 @@ async function withGateway(
       {
         runtime: {
           hasRuntime: () => true,
+          ...(ownershipConflict ? { reserveRun() { throw new Error('Conversation is owned by the terminal'); } } : {}),
+          hasBackgroundWork: () => background,
+          canSteer: () => inputOpen,
+          prepareInput: async () => inputMode,
+          steer: async (sessionId: string, content: string, attachments: unknown[]) => { steers.push({ sessionId, content, attachments }); },
           run: async (runProvider: string, command: string, options: Record<string, unknown>) => {
             runs.push({ provider: runProvider, command, options });
             if (holdRun) {
@@ -112,7 +124,7 @@ async function withGateway(
       },
     );
 
-    await runTest({ socket, runs });
+    await runTest({ socket, runs, steers });
   } finally {
     releaseHeldRun?.();
     releaseHeldRun = null;
@@ -333,5 +345,70 @@ test('busy sessions explicitly reject an acknowledged send without running it', 
     await settle();
     assert.equal(runs.length, 1);
     assert.equal(socket.frames.at(-1)?.status, 'rejected');
+  });
+});
+
+
+test('ordinary background follow-ups use live input and acknowledge retries without replacing the run', async () => {
+  await withGateway('claude', async ({ socket, runs, steers }) => {
+    const frame = JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'progress?', requestId: 'background-followup-123', options: { attachments: [] } });
+    socket.emit('message', frame);
+    await settle();
+    assert.equal(runs.length, 0);
+    assert.deepEqual(steers, [{ sessionId: SESSION_ID, content: 'progress?', attachments: [] }]);
+    assert.equal(socket.frames.at(-1)?.status, 'accepted');
+    socket.emit('message', frame);
+    await settle();
+    assert.equal(steers.length, 1);
+    assert.equal(socket.frames.at(-1)?.status, 'accepted');
+  }, TRANSCRIPT_ROWS, true);
+});
+
+test('a proven closed background input resumes the conversation instead of rejecting the message', async () => {
+  await withGateway('claude', async ({ socket, runs, steers }) => {
+    const frame = JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'keep my question', requestId: 'recover-closed-input' });
+    socket.emit('message', frame);
+    await settle();
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].command, 'keep my question');
+    assert.equal(steers.length, 0);
+    assert.equal(socket.frames.some(frame => frame.kind === 'protocol_error'), false);
+    socket.emit('message', frame);
+    await settle();
+    assert.equal(runs.length, 1);
+  }, TRANSCRIPT_ROWS, true, 'resume');
+});
+
+test('a follow-up reuses open input while the monitor task list is temporarily empty', async () => {
+  await withGateway('claude', async ({ socket, runs, steers }) => {
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'during monitor renewal', requestId: 'monitor-renewal-gap' }));
+    await settle();
+    assert.equal(runs.length, 0);
+    assert.equal(steers[0]?.content, 'during monitor renewal');
+    assert.equal(socket.frames.at(-1)?.status, 'accepted');
+  }, TRANSCRIPT_ROWS, false, 'live', true);
+});
+
+
+test('terminal ownership rejects before acknowledging or starting a chat turn', async () => {
+  await withGateway('claude', async ({ socket, runs }) => {
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'keep this draft', requestId: 'ownership-receipt-test' }));
+    await settle();
+    assert.equal(runs.length, 0);
+    assert.equal(chatRunRegistry.isProcessing(SESSION_ID), false);
+    const receipts = socket.frames.filter(frame => frame.kind === 'chat_send_receipt');
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].status, 'rejected');
+    assert.ok(socket.frames.some(frame => frame.code === 'SESSION_OWNED'));
+  }, TRANSCRIPT_ROWS, false, 'live', false, true);
+});
+
+ test('chat uses the stored directory when an older browser sends a stale cwd', async () => {
+  await withGateway('claude', async ({ socket, runs }) => {
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'continue', options: { cwd: '/stale/browser/path' } }));
+    await settle();
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].options.cwd, sessionsDb.getSessionById(SESSION_ID)?.project_path);
+    assert.notEqual(runs[0].options.cwd, '/stale/browser/path');
   });
 });

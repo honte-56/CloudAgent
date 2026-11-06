@@ -6,6 +6,7 @@ import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
 import { parseIncomingJsonObject, stripAnsiSequences } from '@/shared/utils.js';
+import { sessionExecutionService } from '@/modules/providers/index.js';
 
 type ShellIncomingMessage = {
   type?: string;
@@ -19,6 +20,7 @@ type ShellIncomingMessage = {
   initialCommand?: string;
   isPlainShell?: boolean;
   forceRestart?: boolean;
+  takeoverOwnerId?: string;
   bypassPermissions?: boolean;
   colorScheme?: string;
 };
@@ -36,6 +38,8 @@ type PtySessionEntry = {
   // program. A running CLI keeps its launch-time colours, so a reattaching
   // client needs this, not its own current theme, to know if they differ.
   claudeColorScheme: ShellColorScheme | null;
+  exited: Promise<void>;
+  stop(): Promise<void>;
 };
 
 const ptySessionsMap = new Map<string, PtySessionEntry>();
@@ -119,7 +123,9 @@ type ShellWebSocketDependencies = {
     sessionId: string,
     provider: string,
   ) => string | null | undefined;
+  resolveSessionProjectPath?: (sessionId: string) => string | null | undefined;
   spawnPty?: typeof pty.spawn;
+  execution?: typeof sessionExecutionService;
 };
 
 /**
@@ -260,8 +266,8 @@ function buildShellCommand(
   const launchFlags = `${bypassFlag}${theme.flag}`;
   if (resumeSessionId) {
     const command = os.platform() === 'win32'
-      ? `claude --resume "${resumeSessionId}"${launchFlags}; if ($LASTEXITCODE -ne 0) { claude${launchFlags} }`
-      : `claude --resume "${resumeSessionId}"${launchFlags} || claude${launchFlags}`;
+      ? `claude --resume "${resumeSessionId}"${launchFlags}`
+      : `exec claude --resume "${resumeSessionId}"${launchFlags}`;
     return { command, claudeFollowsAppTheme: theme.followsAppTheme };
   }
   if (initialCommand) {
@@ -537,8 +543,11 @@ export function handleShellConnection(
   let ptySessionKey: string | null = null;
   let urlDetectionBuffer = '';
   const announcedAuthUrls = new Set<string>();
+  const execution = dependencies.execution ?? sessionExecutionService;
+  let initializing = false;
 
   ws.on('message', async (rawMessage) => {
+    let ownsInitialization = false;
     try {
       const data = parseShellMessage(rawMessage);
       if (!data?.type) {
@@ -546,7 +555,10 @@ export function handleShellConnection(
       }
 
       if (data.type === 'init') {
-        const projectPath = readString(data.projectPath, process.cwd());
+        if (initializing) return;
+        initializing = true;
+        ownsInitialization = true;
+        let projectPath = readString(data.projectPath, process.cwd());
         const sessionId = readString(data.sessionId) || null;
         const hasSession = readBoolean(data.hasSession);
         const provider = readString(data.provider, 'claude');
@@ -557,6 +569,9 @@ export function handleShellConnection(
           readBoolean(data.isPlainShell) ||
           (!!initialCommand && !hasSession) ||
           provider === 'plain-shell';
+        if (!isPlainShell && sessionId) {
+          projectPath = dependencies.resolveSessionProjectPath?.(sessionId) || projectPath;
+        }
 
         urlDetectionBuffer = '';
         announcedAuthUrls.clear();
@@ -571,7 +586,21 @@ export function handleShellConnection(
           isPlainShell && initialCommand
             ? `_cmd_${Buffer.from(initialCommand).toString('base64').slice(0, 16)}`
             : '';
-        ptySessionKey = `${projectPath}_${sessionId ?? 'default'}${commandSuffix}`;
+        const nativeId = isPlainShell ? null : resolveResumeSessionId(data, dependencies);
+        // Alias app ids for one native session must reconnect to the same PTY.
+        ptySessionKey = isPlainShell
+          ? `shell:${projectPath}_${sessionId ?? 'default'}${commandSuffix}`
+          : `${provider}:${nativeId || sessionId || projectPath}`;
+
+        if (!isPlainShell && sessionId) {
+          const owner = execution.get(sessionId, provider, nativeId);
+          const takeoverOwnerId = readString(data.takeoverOwnerId);
+          if (owner && takeoverOwnerId) await execution.stop(sessionId, takeoverOwnerId);
+          else if (owner?.kind === 'chat' || owner?.stopping) {
+            ws.send(JSON.stringify({ type: 'session_owned', owner }));
+            return;
+          }
+        }
 
         if (isLoginCommand || forceRestart) {
           const oldSession = ptySessionsMap.get(ptySessionKey);
@@ -579,8 +608,7 @@ export function handleShellConnection(
             if (oldSession.timeoutId) {
               clearTimeout(oldSession.timeoutId);
             }
-            oldSession.pty.kill();
-            ptySessionsMap.delete(ptySessionKey);
+            await oldSession.stop();
           }
         }
 
@@ -646,8 +674,31 @@ export function handleShellConnection(
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
+        if (ws.readyState !== WebSocket.OPEN) return;
 
-        shellProcess = (dependencies.spawnPty ?? pty.spawn)(shell, shellArgs, {
+        let resolveExit!: () => void;
+        const exited = new Promise<void>(resolve => { resolveExit = resolve; });
+        let spawned: IPty | null = null;
+        const stop = async () => {
+          spawned?.kill('SIGTERM');
+          // A terminal that ignores graceful shutdown must not trap Stop and
+          // takeover forever. Escalate only this still-owned PTY, then await exit.
+          const forceKill = setTimeout(() => {
+            try { spawned?.kill('SIGKILL'); } catch { /* onExit remains authoritative. */ }
+          }, 3000);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([exited, new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error('The terminal has not exited yet; takeover is waiting.')), 9000);
+            })]);
+          } finally { clearTimeout(timer); clearTimeout(forceKill); }
+        };
+        // Synchronous reservation closes the chat-start / terminal-start race.
+        const lease = !isPlainShell && sessionId
+          ? execution.claim({ sessionId, provider, nativeId, kind: 'terminal', stop }) : null;
+
+        try {
+          shellProcess = (dependencies.spawnPty ?? pty.spawn)(shell, shellArgs, {
           name: 'xterm-256color',
           cols: termCols,
           rows: termRows,
@@ -663,7 +714,11 @@ export function handleShellConnection(
             // theme before its OSC 11 reply arrives) read it to pick light or dark.
             ...(colorScheme ? { COLORFGBG: colorScheme === 'light' ? '0;15' : '15;0' } : {}),
           },
-        });
+          });
+          spawned = shellProcess;
+        } catch (error) { lease?.release(); resolveExit(); throw error; }
+        const spawnedKey = ptySessionKey;
+        const spawnedProcess = shellProcess;
 
         ptySessionsMap.set(ptySessionKey, {
           pty: shellProcess,
@@ -673,15 +728,13 @@ export function handleShellConnection(
           projectPath,
           sessionId,
           claudeColorScheme,
+          exited,
+          stop,
         });
 
         shellProcess.onData((chunk) => {
-          if (!ptySessionKey) {
-            return;
-          }
-
-          const session = ptySessionsMap.get(ptySessionKey);
-          if (!session) {
+          const session = ptySessionsMap.get(spawnedKey);
+          if (!session || session.pty !== spawnedProcess) {
             return;
           }
 
@@ -752,12 +805,10 @@ export function handleShellConnection(
         });
 
         shellProcess.onExit((exitCode) => {
-          if (!ptySessionKey) {
-            return;
-          }
-
-          const session = ptySessionsMap.get(ptySessionKey);
-          if (session && session.pty !== shellProcess) {
+          lease?.release();
+          resolveExit();
+          const session = ptySessionsMap.get(spawnedKey);
+          if (session && session.pty !== spawnedProcess) {
             return;
           }
 
@@ -776,8 +827,8 @@ export function handleShellConnection(
             clearTimeout(session.timeoutId);
           }
 
-          ptySessionsMap.delete(ptySessionKey);
-          shellProcess = null;
+          ptySessionsMap.delete(spawnedKey);
+          if (shellProcess === spawnedProcess) shellProcess = null;
         });
 
         let welcomeMsg = `\x1b[36mStarting terminal in: ${projectPath}\x1b[0m\r\n`;
@@ -806,7 +857,8 @@ export function handleShellConnection(
       }
 
       if (data.type === 'input') {
-        if (shellProcess) {
+        // A replaced tab cannot type into the PTY now attached elsewhere.
+        if (shellProcess && ptySessionKey && ptySessionsMap.get(ptySessionKey)?.ws === ws) {
           shellProcess.write(readString(data.data));
         }
         return;
@@ -828,6 +880,8 @@ export function handleShellConnection(
           })
         );
       }
+    } finally {
+      if (ownsInitialization) initializing = false;
     }
   });
 
@@ -858,8 +912,7 @@ export function handleShellConnection(
         return;
       }
 
-      session.pty.kill();
-      ptySessionsMap.delete(ptySessionKey as string);
+      void session.stop().catch(error => console.warn('[Shell] Retaining ownership until terminal exit:', error.message));
     }, PTY_SESSION_TIMEOUT);
   });
 

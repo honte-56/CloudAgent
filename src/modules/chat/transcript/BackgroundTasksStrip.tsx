@@ -37,6 +37,8 @@ type BackgroundTasksStripProps = {
   onReveal: (message: ChatMessage) => void;
   /** Loads the rest of the transcript, for a task whose launch row is not loaded yet. */
   onLoadAll: () => void;
+  /** Opens this launch in the read-only progress sidebar without leaving the parent conversation. */
+  onOpenTask?: (toolUseId: string, title: string) => void;
 };
 
 /** The one-line description the launch was given, as the card reads it. */
@@ -98,10 +100,10 @@ function describeTask(message: ChatMessage, t: TFunction) {
 /**
  * Rendered by chat's ChatMessagesPane above the transcript: one chip per
  * background task — workflow, agent or command — that is still running, each
- * scrolling to its card when clicked and stoppable from its ✕. Renders
+ * opening its progress panel (or revealing its card) when clicked and stoppable from its ✕. Renders
  * nothing while nothing runs, which is most of the time.
  */
-export const BackgroundTasksStrip = memo(({ messages, tasks, sessionId, sendMessage, onReveal, onLoadAll }: BackgroundTasksStripProps) => {
+export const BackgroundTasksStrip = memo(({ messages, tasks, sessionId, sendMessage, onReveal, onLoadAll, onOpenTask }: BackgroundTasksStripProps) => {
   const { t } = useTranslation();
   const running = listRunningBackgroundLaunches(messages);
   // A loaded row that has a word on its task — settled or not — is the word;
@@ -131,7 +133,7 @@ export const BackgroundTasksStrip = memo(({ messages, tasks, sessionId, sendMess
           <span key={message.toolId} className="flex min-w-0 max-w-full items-center">
             <button
               type="button"
-              onClick={() => onReveal(message)}
+              onClick={() => onOpenTask ? onOpenTask(message.toolId!, title) : onReveal(message)}
               title={title}
               className="flex min-w-0 max-w-xs items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
             >
@@ -182,7 +184,7 @@ export const BackgroundTasksStrip = memo(({ messages, tasks, sessionId, sendMess
             ) : (
               <button
                 type="button"
-                onClick={onLoadAll}
+                onClick={() => onOpenTask ? onOpenTask(task.toolUseId || task.taskId, [kind, name].filter(Boolean).join(' · ')) : onLoadAll()}
                 title={`${[kind, name].filter(Boolean).join(' · ')} · ${t('workflow.taskRowNotLoaded', 'Launched earlier in this conversation; click to load it')}`}
                 className="flex min-w-0 max-w-xs items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
               >

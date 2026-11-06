@@ -4,6 +4,9 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, test, vi } from 'vitest';
 
 import '@/modules/i18n';
+import { api } from '@/shared/api';
+import { useChatSessionState } from '@/modules/chat/hooks/useChatSessionState';
+import { useSessionStore } from '@/modules/chat/hooks/useSessionStore';
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
 import type { PermissionMode, Project, ProjectSession } from '@/shared/types';
 
@@ -97,11 +100,17 @@ beforeEach(() => {
     return Promise.resolve(jsonResponse([]));
   });
   vi.stubGlobal('fetch', fetchMock);
+  vi.spyOn(api.assets, 'uploadAttachment').mockImplementation(async file => {
+    const body = new FormData(); body.append('files', file);
+    const response = await fetch('/api/assets/files', { method: 'POST', body });
+    return (await response.json()).attachments[0];
+  });
   localStorage.clear();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   localStorage.clear();
 });
 
@@ -150,7 +159,7 @@ test('a failed session creation does not block the retry', async () => {
   assert.deepEqual(chatSends().map((message) => message.sessionId), ['session-2']);
 });
 
-test('submitting again while an attachment uploads sends the message once', async () => {
+test('pending uploads admit no send; repeated submit after completion sends once', async () => {
   const { view, chatSends } = renderComposer({ id: 'session-existing' });
   const image = new File(['png'], 'shot.png', { type: 'image/png' });
   await act(async () => {
@@ -169,6 +178,12 @@ test('submitting again while an attachment uploads sends the message once', asyn
       pending.resolve(jsonResponse({ attachments: [{ name: 'shot.png', mimeType: 'image/png' }] }));
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  assert.equal(chatSends().length, 0, 'finishing an upload must not send a previously blocked attempt automatically');
+  await act(async () => {
+    void view.result.current.handleSubmit({ preventDefault: () => undefined } as never);
+    void view.result.current.handleSubmit({ preventDefault: () => undefined } as never);
   });
 
   assert.equal(uploadRequests().length, 1, 'the attachment is uploaded once');
@@ -197,4 +212,48 @@ test('a pending new chat does not hold up a submit in another session', async ()
     [['session-other', 'elsewhere']],
   );
   await releaseCreates();
+});
+
+test.each(['accepted', 'rejected'])('new-chat navigation preserves first-message delivery through %s admission', async (outcome) => {
+  let acknowledge!: () => void;
+  let reject!: (error: Error) => void;
+  const send = vi.fn(() => new Promise<void>((resolve, fail) => { acknowledge = resolve; reject = fail; }));
+  const noop = () => {};
+  const statusRef = { current: new Map() }, seqRef = { current: new Map() };
+  let navigate!: (sessionId: string) => void;
+  const view = renderHook(({ session }: { session: ProjectSession | null }) => {
+    const store = useSessionStore();
+    const transcript = useChatSessionState({ isActive: true, selectedProject: PROJECT, selectedSession: session, ws: null, sendMessage: noop,  statusCheckSentAtRef: statusRef, lastSeqRef: seqRef, sessionStore: store });
+    const composer = useChatComposerState({
+    selectedProject: PROJECT, selectedSession: session, currentSessionId: session?.id ?? null,
+    provider: 'codex', permissionMode: 'default', cyclePermissionMode: () => undefined,
+    resolvePermissionModeForProvider: () => 'default' as PermissionMode,
+    currentProviderModel: 'test-model', currentProviderEffort: 'medium', isLoading: false,
+    canAbortSession: false, tokenBudget: null, sendMessage: send,
+    onSessionEstablished: id => navigate(id), scrollToBottom: () => undefined,
+    addMessage: transcript.addMessage, setIsUserScrolledUp: () => undefined, setPendingPermissionRequests: () => undefined,
+    });
+    return { ...composer, transcript };
+  }, { initialProps: { session: null as ProjectSession | null } });
+  navigate = id => view.rerender({ session: { id, __provider: 'codex' } as ProjectSession });
+  await act(async () => { view.result.current.setInput('Keep this first message visible'); });
+  act(() => { void view.result.current.handleSubmit({ preventDefault() {} } as never); });
+  await releaseCreates();
+  assert.equal(send.mock.calls.length, 1);
+  assert.equal(view.result.current.isSending, true, 'new session must inherit the pending send');
+  assert.equal(view.result.current.input, 'Keep this first message visible', 'navigation must not replace the draft with an empty one');
+  await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
+  assert.equal(send.mock.calls.length, 1, 'navigation must not unlock a duplicate send');
+  await act(async () => {
+    if (outcome === 'accepted') acknowledge();
+    else reject(new Error('Connection lost; draft kept'));
+  });
+  assert.equal(view.result.current.isSending, false);
+  if (outcome === 'accepted') {
+    assert.equal(view.result.current.input, '');
+    assert.equal(view.result.current.transcript.chatMessages[0]?.content, 'Keep this first message visible');
+  } else {
+    assert.equal(view.result.current.input, 'Keep this first message visible');
+    assert.equal(view.result.current.transcript.chatMessages[0]?.type, 'error');
+  }
 });

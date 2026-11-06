@@ -34,6 +34,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isBinary, setIsBinary] = useState(false);
+  // Failed reads are shown separately from editable file contents.
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Some binaries (images, PDFs, audio, video) can be rendered natively, so the
   // editor shows an inline preview instead of the generic binary placeholder.
   const previewKind = getPreviewKind(file.name);
@@ -65,6 +67,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       try {
         setLoading(true);
         setIsBinary(false);
+        setLoadError(null);
         // Any save still in flight or failed belongs to the previous file.
         setSaving(false);
         setSaveError(null);
@@ -113,7 +116,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         }
         const message = getErrorMessage(error);
         console.error('Error loading file:', error);
-        applyLoadedContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
+        setLoadError(message);
+        applyLoadedContent('');
       } finally {
         if (!isStaleLoad()) {
           setLoading(false);
@@ -127,7 +131,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   const handleSave = useCallback(async () => {
     // Preview-only and binary files have no editable text buffer; never write
     // them back (e.g. via Cmd/Ctrl+S) or we'd corrupt the file on disk.
-    if (previewKind || isBinaryFile(fileName)) {
+    if (loading || loadError || previewKind || isBinaryFile(fileName)) {
       return;
     }
 
@@ -180,22 +184,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         setSaving(false);
       }
     }
-  }, [content, filePath, fileProjectId, previewKind, fileName]);
-
-  const handleDownload = useCallback(() => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-
-    anchor.href = url;
-    anchor.download = file.name;
-
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-
-    URL.revokeObjectURL(url);
-  }, [content, file.name]);
+  }, [content, filePath, fileProjectId, previewKind, fileName, loading, loadError]);
 
   // The baseline only changes on load and save, so it is not re-normalised on
   // every keystroke.
@@ -227,6 +216,6 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     fileProjectId,
     hasUnsavedChanges,
     handleSave,
-    handleDownload,
+    loadError,
   };
 };

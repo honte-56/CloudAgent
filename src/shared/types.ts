@@ -27,11 +27,14 @@ export type ProviderModelOption = {
  * The full model catalog for one provider: every option plus the value used when the user has not chosen one.
  * `EFFORT_LEVELS` lists, weakest first, the reasoning-effort levels a custom model may declare in the model
  * library; the server derives it from the provider, not from the options, and it is empty without effort support.
+ * `CUSTOM_MODELS_ONLY` is the user's "use only my models" flag: while it is on and a custom model exists, the
+ * server lists only custom models and the first is `DEFAULT`. Older servers omit it, which means off.
  */
 export type ProviderModelsDefinition = {
   OPTIONS: ProviderModelOption[];
   DEFAULT: string;
   EFFORT_LEVELS?: string[];
+  CUSTOM_MODELS_ONLY?: boolean;
 };
 
 /**
@@ -57,6 +60,8 @@ export type ProviderModelActions = {
     input: CustomProviderModelInput,
   ): Promise<void>;
   remove(provider: LLMProvider, existing: ProviderModelOption): Promise<void>;
+  /** Turns the provider's "use only my models" flag on or off. */
+  setCustomModelsOnly(provider: LLMProvider, enabled: boolean): Promise<void>;
 };
 
 // ---------------------------
@@ -368,6 +373,8 @@ export type ChatMessage = {
    * Claude; it is the anchor "edit this message" and "fork from here" send back.
    */
   transcriptAnchorId?: string;
+  /** Native boundary of the completed turn retained by a fork; independent of the edit anchor. */
+  forkAnchorId?: string;
   /**
    * Set on the optimistic echo of a message being sent as a replacement for an
    * already-sent one, naming the anchor it replaces. Local to this client.
@@ -450,12 +457,17 @@ export type PendingPermissionRequest = {
   receivedAt?: Date;
 };
 
-/** One question asked by the AskUserQuestion tool, with its answer options and whether more than one option may be selected. */
+/** One question asked by the AskUserQuestion tool, with its answer options, whether more than one option may be selected, and whether a typed answer is offered (`custom: false` hides it; OpenCode's questions can set it). */
 export type Question = {
+  /** Native question ID; answers use it when present instead of the display text. */
+  id?: string;
+  /** Mask free-text entry for questions explicitly marked secret by the provider. */
+  isSecret?: boolean;
   question: string;
   header?: string;
   options: QuestionOption[];
   multiSelect?: boolean;
+  custom?: boolean;
 };
 
 /** Options for a programmatic session navigation, currently only whether the route change should replace the current history entry instead of pushing a new one. */
@@ -491,6 +503,15 @@ type QuestionOption = {
 
 /** A provider-agnostic transcript event as normalized by the backend adapters, with all kind-specific fields kept flat; it is the shape the session store holds and that chat converts into ChatMessage for rendering, so treat it as the wire contract rather than a view model. */
 export type NormalizedMessage = {
+  /** Lifecycle changes require rereading the native parent timeline, without rendering a new message. */
+  historyChanged?: boolean;
+  /** Stable provider item/block identity shared by stream snapshots and persisted history. */
+  messageKey?: string;
+  /** True when a stream frame carries the complete text so far, safe to replace/replay. */
+  streamSnapshot?: boolean;
+  /** Durable delivery sequence of the first frame, retained while a message grows. */
+  firstSeq?: number;
+
   id: string;
   /**
    * The provider's own id for the transcript row behind this message, when the
@@ -498,6 +519,8 @@ export type NormalizedMessage = {
    * anchor for "edit this message" and "fork from here".
    */
   transcriptAnchorId?: string;
+  /** Native boundary of the completed turn retained by a fork; independent of the edit anchor. */
+  forkAnchorId?: string;
   /**
    * Set only on the client-side optimistic echo of an edited message, naming
    * the anchor that echo replaces. Never sent by the backend.
@@ -525,7 +548,7 @@ export type NormalizedMessage = {
   provider: LLMProvider;
   kind: MessageKind;
   /**
-   * Per-run monotonic sequence number assigned by the backend to live
+   * Durable per-session monotonic sequence number assigned by the backend to live
    * websocket events. Used to compute `lastSeq` for `chat.subscribe` replay;
    * REST history messages do not carry it.
    */
@@ -534,6 +557,8 @@ export type NormalizedMessage = {
   // kind-specific fields (flat for simplicity)
   role?: 'user' | 'assistant';
   content?: string;
+  /** True once injected runtime context has been removed; prevents double stripping in old/new client transitions. */
+  runtimeContextStripped?: boolean;
   /**
    * The model that answered this turn, as the backend read it off the
    * provider's own record of the row (today: Claude's `message.model`). Never
@@ -766,6 +791,8 @@ export type CommandModalPayload = {
 /** A composer message queued while its session is still busy, holding the text, the in-memory and already-uploaded attachments and the send options snapshotted at queue time so it can be auto-sent unchanged once the session goes idle. */
 export type QueuedDraft = {
   content: string;
+  /** Server delivery failure retained with the message instead of silently retrying. */
+  deliveryError?: string;
   /** Browser files retained while this composer stays mounted, for editing. */
   attachments: File[];
   /** JSON-safe descriptors uploaded when the message is queued. */
@@ -874,9 +901,10 @@ export type TodoItem = {
 /** Display state of a tool call — 'running', 'completed', 'error' or 'denied' — used to choose the status badge and styling shown beside it in the transcript. */
 export type ToolStatus = 'running' | 'completed' | 'error' | 'denied';
 
-/** Props contract that every interactive permission panel implements, giving the panel the pending request and the callback it calls to allow or deny that request; use it when registering a panel in the permission panel registry. */
+/** Props contract that every interactive permission panel implements, giving the panel the pending request, the name of the agent asking (for its header) and the callback it calls to allow or deny that request; use it when registering a panel in the permission panel registry. */
 export type PermissionPanelProps = {
   request: PendingPermissionRequest;
+  agentLabel?: string;
   onDecision: (
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; updatedInput?: unknown },
@@ -1328,10 +1356,40 @@ export type ProviderAuthStatus = {
   error: string | null;
   loading: boolean;
   subscriptionOverride?: ProviderAuthSubscriptionOverride;
+  /** Version the provider's CLI printed for `--version`; null when unknown, absent until the server has answered. */
+  installedVersion?: string | null;
 };
 
 /** The authentication state of every CLI provider at once, keyed by LLMProvider, so onboarding and settings can render each provider's connected, loading and error state from one object returned by useProviderAuthStatus. */
 export type ProviderAuthStatusMap = Record<LLMProvider, ProviderAuthStatus>;
+
+// ---------------------------
+
+//----------------- PROVIDER CLI VERSION ------------
+
+/** One provider CLI's version state from `GET /api/providers/:provider/cli`: the installed version, the newest npm release (null when the CLI is not on npm or the registry did not answer), the command the update action runs, or why there is none ('bundled': it ships with CloudCLI; 'platform': the hosting platform manages it), whether an update run is going on, and the most recent finished run since the server started. A page that sees `updateInProgress` polls until it turns false and then shows `lastUpdate` as that run's result. Loaded by useProviderCliVersion and rendered by the settings account view. */
+export type ProviderCliStatus = {
+  provider: LLMProvider;
+  installed: boolean;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateCommand: string | null;
+  updateUnavailableReason: 'bundled' | 'platform' | null;
+  updateInProgress: boolean;
+  lastUpdate: ProviderCliUpdateResult | null;
+};
+
+/** What one run of a CLI's own updater did, from `POST /api/providers/:provider/cli/update`: the command, its exit code (null when it could not start or timed out), the tail of its output, the version before and after, and why it failed (null when neither the exit code nor the output reports a failure). Returned by useProviderCliVersion and rendered by the settings account view. */
+export type ProviderCliUpdateResult = {
+  provider: LLMProvider;
+  command: string;
+  exitCode: number | null;
+  output: string;
+  previousVersion: string | null;
+  installedVersion: string | null;
+  failure: 'permission_denied' | 'timed_out' | 'failed' | null;
+};
 
 // ---------------------------
 
@@ -1367,7 +1425,7 @@ export type AgentContext = {
 };
 
 /** Identifier of a top-level section in the settings dialog; use it whenever a tab is stored, compared or requested so deep links, the sidebar and the command palette all agree on the same set of names. */
-export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'about';
+export type SettingsMainTab = 'projects' | 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'about';
 
 /** The coding-agent CLI a settings screen is configuring, aliasing LLMProvider so agent-scoped settings read as being about an agent rather than a chat model. */
 export type AgentProvider = LLMProvider;
@@ -1466,6 +1524,43 @@ export type GithubCredentialItem = {
 
 // ---------------------------
 
+//----------------- SETTINGS NOTIFICATION WEBHOOK ------------
+
+/** Why a webhook delivery failed, exactly as the server stores it; the webhook card maps each value to a localized reason. */
+export type NotificationWebhookDeliveryError =
+  | 'invalidUrl'
+  | 'insecureUrl'
+  | 'blockedAddress'
+  | 'timeout'
+  | 'redirect'
+  | 'httpStatus'
+  | 'network'
+  | 'tls'
+  | 'dropped';
+
+/** The outcome of the most recent webhook event after its last attempt, as the server records it; `status` is the HTTP status when the receiver answered, `type` the event type (e.g. run.completed, webhook.test). */
+export type NotificationWebhookDelivery = {
+  eventId: string;
+  type: string;
+  ok: boolean;
+  status: number | null;
+  error: NotificationWebhookDeliveryError | null;
+  attempts: number;
+  at: string;
+};
+
+/** The saved webhook destination as the notifications API returns it. The signing secret is never part of it, only whether one is set; `configured` is false until a URL has been saved. */
+export type NotificationWebhookState = {
+  configured: boolean;
+  enabled: boolean;
+  url: string;
+  allowHttp: boolean;
+  hasSecret: boolean;
+  lastDelivery: NotificationWebhookDelivery | null;
+};
+
+// ---------------------------
+
 //----------------- SHELL ------------
 
 /** Handle returned when touch text-selection is installed on an xterm terminal; call updateHandles after the terminal reflows and dispose when tearing the terminal down. */
@@ -1502,7 +1597,7 @@ export type SessionRowActions = {
   onSaveEditingSession: (projectId: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   onDeleteSession: (sessionId: string, sessionTitle: string) => void;
   /** Branches a session into an independent one. Rows hide it for providers that cannot. */
-  onForkSession?: (session: SessionWithProvider) => void;
+  onForkSession?: (session: SessionWithProvider) => void | Promise<void>;
 };
 
 export type SidebarProjectListProps = SessionRowActions & {
@@ -1844,3 +1939,33 @@ type TaskStatus =
 
 /** A TaskMaster task's priority; high, medium and low are the known values and the string fallback tolerates anything else TaskMaster emits. */
 type TaskPriority = 'high' | 'medium' | 'low' | string;
+
+//----------------- NATIVE MESSAGE QUEUE ------------
+/** Provider-acknowledged queued input shown by the chat composer; IDs address individual native entries. */
+export type NativeQueuedMessage = { id: string; content: string; attachments: ChatAttachment[]; deliveryError?: string };
+
+//----------------- ATTACHMENT UPLOAD DISPLAY ------------
+/** One selected attachment's upload state; drives the composer's dim overlay, progress ring and error message. */
+export type AttachmentUploadState = { progress: number; status: 'compressing' | 'uploading' | 'ready' | 'error'; error?: string };
+
+//----------------- TASK PROGRESS PANEL ------------
+/** Read-only task progress snapshot. Targets are resolved from the parent's recorded launch, never from a client-supplied path or guessed session. */
+export type TaskProgressSnapshot = {
+  parentSessionId: string;
+  toolUseId: string;
+  title: string;
+  provider: LLMProvider;
+  kind: 'conversation' | 'agent' | 'workflow' | 'command';
+  status: string;
+  childSessionId?: string;
+  messages?: NormalizedMessage[];
+  totalMessages?: number;
+  activity?: SubagentActivity[];
+  activityCount?: number;
+  agents?: Array<{ id: string; label?: string; status: string }>;
+  selectedAgentId?: string;
+  output?: string;
+  outputTruncated?: boolean;
+  notice?: string;
+  updatedAt: string;
+};

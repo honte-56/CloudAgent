@@ -10,6 +10,7 @@ function fixture(resumed = false) {
   const messages: AnyRecord[] = [];
   let rejectSteer = false;
   let closed = false;
+  const queue: AnyRecord[] = [];
   const runtime = createCodexLiveRuntime((notification) => {
     notify = notification;
     return {
@@ -17,6 +18,18 @@ function fixture(resumed = false) {
       close: () => { closed = true; },
       async call(method, params) {
         calls.push({ method, params });
+        if (method === 'thread/queue/list') return { data: [...queue] };
+        if (method === 'thread/queue/add') {
+          const entry = { id: `queued-${calls.length}`, input: params.input, clientUserMessageId: params.clientUserMessageId };
+          queue.push(entry);
+          return { queuedSubmission: entry };
+        }
+        if (method === 'thread/queue/delete') {
+          const index = queue.findIndex(item => item.id === params.queuedSubmissionId);
+          if (index < 0) return { deleted: false };
+          queue.splice(index, 1);
+          return { deleted: true };
+        }
         if (method.startsWith('thread/')) return { thread: { id: 'native-thread' } };
         if (method === 'turn/start') {
           notify('turn/started', { threadId: 'native-thread', turn: { id: 'turn-1' } });
@@ -34,7 +47,7 @@ function fixture(resumed = false) {
     normalizeMessage: (raw) => [{ ...(raw as AnyRecord), kind: 'tool_use' } as never],
     isProviderInstalled: async () => true,
   };
-  return { runtime, context, calls, messages, notify: (method: string, params: AnyRecord) => notify(method, params), rejectSteer: () => { rejectSteer = true; }, closed: () => closed };
+  return { runtime, context, calls, messages, queue, notify: (method: string, params: AnyRecord) => notify(method, params), rejectSteer: () => { rejectSteer = true; }, closed: () => closed };
 }
 
 for (const resumed of [false, true]) {
@@ -88,4 +101,68 @@ test('failed turns report failure and progressive tool output keeps stable ids',
   assert.equal(tools[1].output, '/tmp');
   assert.ok(f.messages.some((message) => message.kind === 'error' && message.content === 'API failure'));
   assert.ok(f.messages.some((message) => message.kind === 'complete' && message.exitCode === 1));
+});
+
+
+test('native queue appends independent inputs and keeps one runtime through all queued turns', async () => {
+  const f = fixture();
+  const running = f.runtime.run('initial', { sessionId: 'app-id' }, { isWebSocketWriter: true, send: message => f.messages.push(message as AnyRecord) }, f.context);
+  await new Promise(setImmediate);
+  const attachment = { path: '/tmp/queued.txt', name: 'queued.txt', mimeType: 'text/plain' };
+  const first = await f.runtime.queue.add('app-id', 'first follow-up', [attachment], 'request-1');
+  const second = await f.runtime.queue.add('app-id', 'second follow-up', [], 'request-2');
+  assert.equal((await f.runtime.queue.list('app-id')).length, 2);
+  assert.deepEqual(await f.runtime.queue.add('app-id', 'first follow-up', [attachment], 'request-1'), first);
+  assert.equal(f.calls.filter(call => call.method === 'thread/queue/add').length, 2);
+  f.notify('turn/completed', { threadId: 'native-thread', turn: { id: 'turn-1', status: 'completed' } });
+  await new Promise(setImmediate);
+  assert.equal(f.closed(), false, 'must not kill the native queue after its first turn');
+  f.queue.shift();
+  f.notify('turn/started', { threadId: 'native-thread', turn: { id: 'turn-2' } });
+  f.notify('item/started', { threadId: 'native-thread', turnId: 'turn-2', item: { type: 'userMessage', clientId: 'request-1' } });
+  assert.deepEqual(f.messages.find(message => message.role === 'user')?.files, [attachment]);
+  assert.equal(await f.runtime.queue.cancel('app-id', second.id), true);
+  assert.equal((await f.runtime.queue.list('app-id')).length, 0);
+  f.notify('turn/completed', { threadId: 'native-thread', turn: { id: 'turn-2', status: 'completed' } });
+  await running;
+  assert.equal(f.closed(), true);
+  assert.equal(f.messages.filter(message => message.kind === 'complete').length, 1);
+});
+
+test('send-now claims only the chosen native entry; a consumed entry is never resent', async () => {
+  const f = fixture();
+  const running = f.runtime.run('initial', { sessionId: 'app-id' }, { isWebSocketWriter: true, send: message => f.messages.push(message as AnyRecord) }, f.context);
+  await new Promise(setImmediate);
+  const first = await f.runtime.queue.add('app-id', 'first', [], 'request-1');
+  const second = await f.runtime.queue.add('app-id', 'second', [], 'request-2');
+  await f.runtime.queue.sendNow('app-id', second.id);
+  assert.equal(f.messages.find(message => message.role === 'user')?.content, 'second', 'native receipt immediately echoes the chosen input');
+  assert.equal(f.messages.find(message => message.role === 'user')?.id, 'request-2');
+  assert.deepEqual((await f.runtime.queue.list('app-id')).map(item => item.id), [first.id]);
+  assert.equal(f.calls.filter(call => call.method === 'turn/start').length, 2);
+  await f.runtime.queue.sendNow('app-id', second.id);
+  assert.equal(f.calls.filter(call => call.method === 'turn/start').length, 2);
+  f.runtime.abort('app-id');
+  await running;
+});
+
+test('assistant deltas are forwarded before item completion and stay scoped to the native thread', async () => {
+  const f = fixture();
+  const running = f.runtime.run('initial', { sessionId: 'app-id' }, { isWebSocketWriter: true, send: message => f.messages.push(message as AnyRecord) }, f.context);
+  await new Promise(setImmediate);
+  f.notify('item/agentMessage/delta', { threadId: 'other', itemId: 'wrong', delta: 'ignore' });
+  f.notify('item/agentMessage/delta', { threadId: 'native-thread', itemId: 'answer', delta: 'hello' });
+  assert.equal(f.messages.filter(row => row.kind === 'stream_delta').length, 1);
+  assert.equal(f.messages.find(row => row.kind === 'stream_delta')?.messageKey, 'codex:answer');
+  f.notify('turn/completed', { threadId: 'native-thread', turn: { id: 'turn-1', status: 'completed' } });
+  await running;
+});
+
+test('plan state notifications refresh native history without fabricating an unrelated tool id',async()=>{
+ const f=fixture();const running=f.runtime.run('initial',{sessionId:'app-id'},{isWebSocketWriter:true,send:message=>f.messages.push(message as AnyRecord)},f.context);
+ await new Promise(setImmediate);
+ f.notify('turn/plan/updated',{threadId:'native-thread',turnId:'turn-1',plan:[{step:'Check',status:'inProgress'}]});
+ assert(f.messages.some(message=>message.kind==='status'&&message.historyChanged===true));
+ assert(!f.messages.some(message=>message.itemId==='turn-1-plan'));
+ f.notify('turn/completed',{threadId:'native-thread',turn:{id:'turn-1',status:'completed'}});await running;
 });

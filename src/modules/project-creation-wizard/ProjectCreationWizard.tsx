@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { readUserPreference, subscribeToUserPreferences } from '@/shared/userSettings';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -9,7 +10,7 @@ import WizardFooter from '@/modules/project-creation-wizard/WizardFooter';
 import WizardProgress from '@/modules/project-creation-wizard/WizardProgress';
 import { useGithubTokens } from '@/modules/project-creation-wizard/hooks/useGithubTokens';
 import { cloneWorkspaceWithProgress, createProjectRequest } from '@/modules/project-creation-wizard/utils/workspaceApi';
-import { isCloneWorkflow, shouldShowGithubAuthentication } from '@/modules/project-creation-wizard/utils/pathUtils';
+import { isCloneWorkflow, joinFolderPath } from '@/modules/project-creation-wizard/utils/pathUtils';
 import type { TokenMode, WizardFormState, WizardStep } from '@/shared/types';
 
 type ProjectCreationWizardProps = {
@@ -20,7 +21,7 @@ type ProjectCreationWizardProps = {
 const initialFormState: WizardFormState = {
   workspacePath: '',
   githubUrl: '',
-  tokenMode: 'stored',
+  tokenMode: 'none',
   selectedGithubToken: '',
   newGithubToken: '',
 };
@@ -37,8 +38,10 @@ export default function ProjectCreationWizard({
   const [error, setError] = useState<string | null>(null);
   const [cloneProgress, setCloneProgress] = useState('');
 
-  const shouldLoadTokens =
-    step === 1 && shouldShowGithubAuthentication(formState.githubUrl);
+  const defaultDirectory = useSyncExternalStore(subscribeToUserPreferences, () => readUserPreference('defaultProjectDirectory', ''));
+  const workspacePath = defaultDirectory && formState.workspacePath.trim() && !/^(?:[/\\~]|[A-Za-z]:)/.test(formState.workspacePath.trim())
+    ? joinFolderPath(defaultDirectory, formState.workspacePath) : formState.workspacePath;
+  const shouldLoadTokens = step === 1;
 
   const autoSelectToken = useCallback((tokenId: string) => {
     setFormState((previous) => ({ ...previous, selectedGithubToken: tokenId }));
@@ -93,7 +96,7 @@ export default function ProjectCreationWizard({
       if (shouldCloneRepository) {
         const project = await cloneWorkspaceWithProgress(
           {
-            workspacePath: formState.workspacePath,
+            workspacePath,
             githubUrl: formState.githubUrl,
             tokenMode: formState.tokenMode,
             selectedGithubToken: formState.selectedGithubToken,
@@ -110,7 +113,9 @@ export default function ProjectCreationWizard({
       }
 
       const project = await createProjectRequest({
-        path: formState.workspacePath.trim(),
+        path: workspacePath.trim(),
+        githubTokenId: formState.tokenMode === 'stored' && formState.selectedGithubToken ? Number(formState.selectedGithubToken) : null,
+        newGithubToken: formState.tokenMode === 'new' ? formState.newGithubToken.trim() || null : null,
       });
 
       onProjectCreated?.(project);
@@ -124,7 +129,7 @@ export default function ProjectCreationWizard({
     } finally {
       setIsCreating(false);
     }
-  }, [formState, onClose, onProjectCreated, t]);
+  }, [formState, workspacePath, onClose, onProjectCreated, t]);
 
   const shouldCloneRepository = useMemo(
     () => isCloneWorkflow(formState.githubUrl),
@@ -133,7 +138,7 @@ export default function ProjectCreationWizard({
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
-      <div className="h-full w-full overflow-y-auto rounded-none border-0 border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 sm:h-auto sm:max-w-2xl sm:rounded-lg sm:border">
+      <div className="h-full w-full overflow-y-auto rounded-none border-0 border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 sm:h-auto sm:max-h-[90dvh] sm:max-w-2xl sm:rounded-lg sm:border">
         <div className="flex items-center justify-between border-b border-gray-200 p-6 dark:border-gray-700">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/50">
@@ -157,6 +162,9 @@ export default function ProjectCreationWizard({
         <div className="min-h-[300px] space-y-6 p-6">
           {error && <ErrorBanner message={error} />}
 
+          {step === 1 && defaultDirectory && (
+            <p className="text-xs text-muted-foreground">{t('projectSettings.pathPreview', { path: workspacePath || defaultDirectory })}</p>
+          )}
           {step === 1 && (
             <StepConfiguration
               workspacePath={formState.workspacePath}
@@ -183,7 +191,7 @@ export default function ProjectCreationWizard({
 
           {step === 2 && (
             <StepReview
-              formState={formState}
+              formState={{ ...formState, workspacePath }}
               selectedTokenName={selectedTokenName}
               isCreating={isCreating}
               cloneProgress={cloneProgress}

@@ -3,10 +3,12 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { AnyRecord } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import type { AnyRecord } from '@/shared/index.js';
+import { AppError } from '@/shared/index.js';
+import { queryCodexPlanUsage } from '@/modules/providers/services/codex-plan-query.service.js';
+import { queryClaudePlanUsage } from '@/modules/providers/services/claude-plan-query.service.js';
 
-export type PlanUsageWindow = {
+type PlanUsageWindow = {
   id: string;
   /** Length of the rate-limit window in minutes, when the provider reports it. */
   windowMinutes: number | null;
@@ -15,17 +17,17 @@ export type PlanUsageWindow = {
   resetsAt: string | null;
 };
 
-export type PlanUsageStatus = 'ok' | 'unauthenticated' | 'token-expired' | 'unsupported' | 'error';
+type PlanUsageStatus = 'ok' | 'unauthenticated' | 'token-expired' | 'unsupported' | 'timeout' | 'error';
 
-export type PlanUsageResult = {
+type PlanUsageResult = {
   provider: string;
   status: PlanUsageStatus;
   planName: string | null;
   windows: PlanUsageWindow[];
   credits: { balance: string | null; unlimited: boolean } | null;
-  /** 'live' = fetched from the provider now, 'session-log' = last value the CLI logged. */
-  source: 'live' | 'session-log' | null;
-  /** ISO timestamp of the data (fetch time for live, event time for session-log). */
+  /** CLI control response for live queries, transcript event only as a Codex fallback. */
+  source: 'cli' | 'session-log' | null;
+  /** ISO timestamp of the completed live query, or the original logged event on fallback. */
   fetchedAt: string | null;
   message?: string;
 };
@@ -35,24 +37,19 @@ type FileTail = { content: string; isComplete: boolean };
 type ProviderPlanUsageServiceDependencies = {
   getHomeDirectory: () => string;
   now: () => number;
-  readTextFile: (filePath: string) => Promise<string>;
+  queryClaudeUsage: typeof queryClaudePlanUsage;
+  queryCodexUsage: typeof queryCodexPlanUsage;
   readTextFileTail: (filePath: string, maxBytes: number) => Promise<FileTail>;
   readDirectory: (directoryPath: string) => Promise<Dirent[]>;
   statMtimeMs: (filePath: string) => Promise<number>;
-  fetchJson: (url: string, init: { headers: Record<string, string>; timeoutMs: number }) => Promise<{
-    status: number;
-    body: unknown;
-  }>;
 };
 
-const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CLAUDE_USAGE_CACHE_MS = 60_000;
-const CLAUDE_USAGE_TIMEOUT_MS = 5_000;
 const CODEX_LOG_TAIL_BYTES = 1024 * 1024;
+const PLAN_USAGE_CACHE_MS = 5 * 60_000;
 /** How many of the newest Codex session files are searched for a rate-limit snapshot. */
 const CODEX_MAX_FILES_SCANNED = 8;
 
-/** Display order for the Claude windows the usage endpoint may return. */
+/** Display order for the Claude CLI quota windows. */
 const CLAUDE_WINDOWS: Array<{ key: string; id: string; windowMinutes: number }> = [
   { key: 'five_hour', id: 'five_hour', windowMinutes: 300 },
   { key: 'seven_day', id: 'weekly', windowMinutes: 10_080 },
@@ -63,7 +60,8 @@ const CLAUDE_WINDOWS: Array<{ key: string; id: string; windowMinutes: number }> 
 const defaultDependencies: ProviderPlanUsageServiceDependencies = {
   getHomeDirectory: () => os.homedir(),
   now: () => Date.now(),
-  readTextFile: (filePath) => fsp.readFile(filePath, 'utf8'),
+  queryClaudeUsage: queryClaudePlanUsage,
+  queryCodexUsage: queryCodexPlanUsage,
   readTextFileTail: async (filePath, maxBytes) => {
     const handle = await fsp.open(filePath, 'r');
     try {
@@ -87,16 +85,7 @@ const defaultDependencies: ProviderPlanUsageServiceDependencies = {
   },
   readDirectory: (directoryPath) => fsp.readdir(directoryPath, { withFileTypes: true }),
   statMtimeMs: async (filePath) => (await fsp.stat(filePath)).mtimeMs,
-  fetchJson: async (url, { headers, timeoutMs }) => {
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    let body: unknown = null;
-    try {
-      body = await response.json();
-    } catch {
-      // A non-JSON error body carries nothing we can show.
-    }
-    return { status: response.status, body };
-  },
+
 };
 
 function emptyResult(provider: string, status: PlanUsageStatus, message?: string): PlanUsageResult {
@@ -147,10 +136,10 @@ function formatPlanName(raw: unknown): string | null {
 }
 
 /**
- * Maps the Claude `/api/oauth/usage` body to windows. Every field is read
- * defensively because the endpoint is not a documented API.
+ * Used by the usage service/tests to normalize the CLI usage response windows.
+ * Expired windows are omitted: a stale snapshot cannot prove the new usage is 0%.
  */
-export function parseClaudeUsageBody(body: unknown): PlanUsageWindow[] {
+export function parseClaudeUsageBody(body: unknown, nowMs: number): PlanUsageWindow[] {
   if (!body || typeof body !== 'object') {
     return [];
   }
@@ -162,22 +151,25 @@ export function parseClaudeUsageBody(body: unknown): PlanUsageWindow[] {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    const utilization = readFiniteNumber((entry as AnyRecord).utilization);
-    if (utilization === null) {
+    const utilization = (entry as AnyRecord).utilization;
+    const resetValue = (entry as AnyRecord).resets_at;
+    const resetMs = typeof resetValue === 'string' ? Date.parse(resetValue) : NaN;
+    if (typeof utilization !== 'number' || !Number.isFinite(utilization)
+      || !Number.isFinite(resetMs) || resetMs <= nowMs || resetMs > 8.64e15) {
       continue;
     }
     windows.push({
       id: definition.id,
       windowMinutes: definition.windowMinutes,
       usedPercent: clampPercent(utilization),
-      resetsAt: toIsoFromDateLike((entry as AnyRecord).resets_at),
+      resetsAt: new Date(resetMs).toISOString(),
     });
   }
   return windows;
 }
 
 /**
- * Maps a Codex `rate_limits` object (from a `token_count` event) to a result.
+ * Used by this service and its tests to map Codex token_count rate_limits events.
  * A window whose reset time has already passed is reported as 0% used: the
  * logged percentage describes the old window.
  */
@@ -229,99 +221,69 @@ export function parseCodexRateLimits(
   };
 }
 
+/** Used by the provider route singleton and isolated usage tests. */
 export function createProviderPlanUsageService(
   overrides: Partial<ProviderPlanUsageServiceDependencies> = {},
 ) {
   const dependencies = { ...defaultDependencies, ...overrides };
-  let claudeCache: { expiresAt: number; result: PlanUsageResult } | null = null;
+  // Reopening the panel shares successful results for five minutes after completion.
+  let claudeCache: { result: PlanUsageResult; expiresAt: number } | null = null;
+  // Concurrent cache misses share one CLI process.
   let claudeInFlight: Promise<PlanUsageResult> | null = null;
-
-  async function fetchClaudeUsage(): Promise<PlanUsageResult> {
-    const credentialsPath = path.join(dependencies.getHomeDirectory(), '.claude', '.credentials.json');
-    let oauth: AnyRecord | null = null;
+  async function fetchClaudePlanUsage(): Promise<PlanUsageResult> {
     try {
-      const parsed = JSON.parse(await dependencies.readTextFile(credentialsPath)) as AnyRecord;
-      oauth = parsed.claudeAiOauth && typeof parsed.claudeAiOauth === 'object'
-        ? parsed.claudeAiOauth as AnyRecord
-        : null;
-    } catch {
-      // Missing or unreadable credentials mean there is no subscription login here.
-    }
-
-    const accessToken = typeof oauth?.accessToken === 'string' ? oauth.accessToken : '';
-    if (!oauth || !accessToken) {
-      return emptyResult(
-        'claude',
-        'unauthenticated',
-        'No Claude subscription login was found on this server.',
-      );
-    }
-
-    const planName = formatPlanName(oauth.subscriptionType);
-    const expiresAt = readFiniteNumber(oauth.expiresAt);
-    if (expiresAt !== null && expiresAt <= dependencies.now()) {
-      // Refresh tokens rotate; refreshing here could invalidate the CLI's own login.
-      return { ...emptyResult('claude', 'token-expired', 'The Claude login has expired. Run `claude` once in a terminal to refresh it.'), planName };
-    }
-
-    let response: { status: number; body: unknown };
-    try {
-      response = await dependencies.fetchJson(CLAUDE_USAGE_URL, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'anthropic-beta': 'oauth-2025-04-20',
-          Accept: 'application/json',
-        },
-        timeoutMs: CLAUDE_USAGE_TIMEOUT_MS,
-      });
-    } catch {
-      return { ...emptyResult('claude', 'error', 'Could not reach the Claude usage service.'), planName };
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      return { ...emptyResult('claude', 'token-expired', 'The Claude login was rejected. Run `claude` once in a terminal to refresh it.'), planName };
-    }
-    if (response.status < 200 || response.status >= 300) {
+      const usage = await dependencies.queryClaudeUsage();
+      const windows = parseClaudeUsageBody(usage.rate_limits, dependencies.now());
       return {
-        ...emptyResult('claude', 'error', `The Claude usage service returned HTTP ${response.status}.`),
-        planName,
+        ...emptyResult('claude', usage.rate_limits_available && windows.length ? 'ok' : 'unsupported'),
+        planName: formatPlanName(usage.subscription_type),
+        windows: usage.rate_limits_available ? windows : [],
+        source: 'cli',
+        fetchedAt: new Date(dependencies.now()).toISOString(),
       };
+    } catch (error) {
+      // Do not surface CLI stderr or credential-related errors verbatim to the UI.
+      return emptyResult('claude', error instanceof AppError && error.code === 'CLAUDE_USAGE_TIMEOUT' ? 'timeout' : 'error');
     }
-
-    const windows = parseClaudeUsageBody(response.body);
-    if (windows.length === 0) {
-      return { ...emptyResult('claude', 'unsupported', 'The Claude usage service returned no limits for this account.'), planName };
-    }
-
-    return {
-      provider: 'claude',
-      status: 'ok',
-      planName,
-      windows,
-      credits: null,
-      source: 'live',
-      fetchedAt: new Date(dependencies.now()).toISOString(),
-    };
   }
-
-  async function getClaudePlanUsage(): Promise<PlanUsageResult> {
-    if (claudeCache && claudeCache.expiresAt > dependencies.now()) {
-      return claudeCache.result;
+  function getClaudePlanUsage(forceRefresh: boolean): Promise<PlanUsageResult> {
+    if (!forceRefresh && claudeCache && dependencies.now() < claudeCache.expiresAt) {
+      return Promise.resolve(claudeCache.result);
     }
-    // Concurrent opens share one upstream request.
-    claudeInFlight ??= fetchClaudeUsage()
-      .then((result) => {
-        // Failures are not cached for the full window, but a short hold stops hammering a 429.
-        claudeCache = {
-          result,
-          expiresAt: dependencies.now() + (result.status === 'ok' ? CLAUDE_USAGE_CACHE_MS : 10_000),
-        };
+    claudeCache = null;
+    claudeInFlight ??= fetchClaudePlanUsage()
+      .then(result => {
+        if (result.status === 'ok') {
+          claudeCache = { result, expiresAt: dependencies.now() + PLAN_USAGE_CACHE_MS };
+        }
         return result;
       })
-      .finally(() => {
-        claudeInFlight = null;
-      });
+      .finally(() => { claudeInFlight = null; });
     return claudeInFlight;
+  }
+
+  // Codex uses the same five-minute policy, but only live results enter cache.
+  let codexCache: { result: PlanUsageResult; expiresAt: number } | null = null;
+  let codexInFlight: Promise<PlanUsageResult> | null = null;
+  function getLiveCodexPlanUsage(forceRefresh: boolean): Promise<PlanUsageResult> {
+    if (!forceRefresh && codexCache && dependencies.now() < codexCache.expiresAt) return Promise.resolve(codexCache.result);
+    codexCache = null;
+    codexInFlight ??= (async () => {
+      try {
+        const limits = await dependencies.queryCodexUsage();
+        const now = dependencies.now();
+        const result = parseCodexRateLimits(limits, new Date(now).toISOString(), now);
+        if (!result.windows.length) throw new Error('Codex returned no quota windows.');
+        result.source = 'cli';
+        codexCache = { result, expiresAt: now + PLAN_USAGE_CACHE_MS };
+        return result;
+      } catch (error) {
+        const fallback = await getCodexPlanUsage();
+        if (fallback.status === 'ok') return { ...fallback, message: 'Live quota query failed; showing the last recorded session data.' };
+        return emptyResult('codex', error instanceof AppError && error.code === 'CODEX_USAGE_TIMEOUT' ? 'timeout' : 'error');
+      }
+    })().finally(() => { codexInFlight = null; });
+    return codexInFlight;
   }
 
   /** Session files newest-first by mtime, walking the date-partitioned tree. */
@@ -395,12 +357,12 @@ export function createProviderPlanUsageService(
   }
 
   return {
-    async getPlanUsage(provider: string): Promise<PlanUsageResult> {
+    async getPlanUsage(provider: string, { forceRefresh = false } = {}): Promise<PlanUsageResult> {
       if (provider === 'claude') {
-        return getClaudePlanUsage();
+        return getClaudePlanUsage(forceRefresh);
       }
       if (provider === 'codex') {
-        return getCodexPlanUsage();
+        return getLiveCodexPlanUsage(forceRefresh);
       }
       if (provider === 'cursor' || provider === 'opencode') {
         return emptyResult(provider, 'unsupported', 'Plan usage is not available for this provider.');
@@ -413,4 +375,5 @@ export function createProviderPlanUsageService(
   };
 }
 
+/** Used by Providers routes to serve CLI quota data. */
 export const providerPlanUsageService = createProviderPlanUsageService();

@@ -330,3 +330,76 @@ test('live input reactivates the held writer and completes the follow-up once', 
     assert.equal(chatRunRegistry.isProcessing('held-input'), false);
   });
 });
+
+test('native-id replacement publishes one stable run and merges the watcher history before broadcast', async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createAppSession('replay-app', 'claude', '/workspace/demo');
+    sessionsDb.assignProviderSessionId('replay-app', 'replay-old');
+    sessionsDb.createSession('replay-old', 'claude', '/workspace/demo', undefined, undefined, undefined, '/old.jsonl');
+    sessionsDb.createSession('replay-new', 'claude', '/workspace/demo', undefined, undefined, undefined, '/new.jsonl');
+    const connection = new FakeConnection();
+    connectedClients.add(connection as never);
+    const run = chatRunRegistry.startRun({ appSessionId: 'replay-app', provider: 'claude', providerSessionId: 'replay-old', connection, userId: null });
+    assert.ok(run);
+    run.writer.setSessionId('replay-new');
+    run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'replay-new', content: 'still the same run' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(run.providerSessionId, 'replay-new');
+    assert.equal(run.writer.getSessionId(), 'replay-new');
+    assert.equal(sessionsDb.getSessionById('replay-app')?.jsonl_path, '/new.jsonl');
+    assert.equal(sessionsDb.getSessionById('replay-new'), null);
+    assert.deepEqual(chatRunRegistry.listRunningRuns().map(row => row.sessionId), ['replay-app']);
+    assert.ok(connection.frames.some(row => row.kind === 'session_upserted' && row.sessionId === 'replay-app' && row.providerSessionId === 'replay-new'));
+    assert.equal(connection.frames.find(row => row.kind === 'text')?.sessionId, 'replay-app');
+  });
+});
+
+test('a rejected mapping never changes the writer or running registry identity', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('owner', 'claude', '/workspace/demo');
+    sessionsDb.assignProviderSessionId('owner', 'owned-native');
+    sessionsDb.createAppSession('requester', 'claude', '/workspace/demo');
+    const run = chatRunRegistry.startRun({ appSessionId: 'requester', provider: 'claude', providerSessionId: null, connection: null, userId: null });
+    assert.ok(run);
+    assert.throws(() => run.writer.setSessionId('owned-native'), /another app session/);
+    assert.equal(run.writer.getSessionId(), null);
+    assert.equal(run.providerSessionId, null);
+    assert.equal(sessionsDb.getSessionById('requester')?.provider_session_id, null);
+  });
+});
+
+test('delivery cursors survive new turns and process-state eviction; stream replay is self-contained', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('durable-stream', 'claude', '/workspace/demo');
+    const start = () => chatRunRegistry.startRun({ appSessionId: 'durable-stream', provider: 'claude', providerSessionId: null, connection: new FakeConnection(), userId: null })!;
+    const first = start();
+    first.writer.send({ id: 'reply', messageKey: 'reply', kind: 'stream_delta', provider: 'claude', content: '你' });
+    first.writer.send({ id: 'reply', messageKey: 'reply', kind: 'stream_delta', provider: 'claude', content: '好' });
+    const replay = chatRunRegistry.replayEvents('durable-stream', 0);
+    assert.equal(replay.length, 1);
+    assert.equal(replay[0].content, '你好');
+    assert.equal(replay[0].streamSnapshot, true);
+    assert.equal(replay[0].firstSeq, 1);
+    assert.equal(replay[0].seq, 1, 'fragments are batched into one delivery');
+    chatRunRegistry.completeRun('durable-stream', { exitCode: 0 });
+    const previous = first.lastSeq;
+    chatRunRegistry.clearAll();
+    const next = start();
+    next.writer.send({ id: 'reply2', messageKey: 'reply2', kind: 'text', role: 'assistant', provider: 'claude', content: '你好' });
+    assert.equal(next.lastSeq, previous + 1);
+    first.writer.send({ kind: 'text', provider: 'claude', content: 'obsolete worker' });
+    assert.equal(chatRunRegistry.replayEvents('durable-stream', previous).length, 1);
+  });
+});
+
+test('an edit retires obsolete replay frames without resetting delivery sequence',async()=>{
+ await withIsolatedDatabase(()=>{
+  sessionsDb.createAppSession('edited-stream','claude','/workspace');
+  const run=chatRunRegistry.startRun({appSessionId:'edited-stream',provider:'claude',providerSessionId:null,connection:new FakeConnection(),userId:null})!;
+  run.writer.send({kind:'text',id:'obsolete',provider:'claude',content:'old reply'});
+  run.writer.send({kind:'history_truncated',provider:'claude',anchorId:'old-question'});
+  run.writer.send({kind:'text',id:'new',provider:'claude',content:'new reply'});
+  const events=chatRunRegistry.replayEvents('edited-stream',0);
+  assert.deepEqual(events.map(e=>e.seq),[2,3]);assert(!events.some(e=>e.id==='obsolete'));
+ });
+});

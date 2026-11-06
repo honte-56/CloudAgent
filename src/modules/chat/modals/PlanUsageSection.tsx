@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Gauge, Loader2, RefreshCw } from 'lucide-react';
+import { Gauge, RefreshCw } from 'lucide-react';
 
 import { api } from '@/shared/api';
 
@@ -13,20 +13,34 @@ type PlanUsageWindow = {
 
 type PlanUsageData = {
   provider: string;
-  status: 'ok' | 'unauthenticated' | 'token-expired' | 'unsupported' | 'error';
+  status: 'ok' | 'unauthenticated' | 'token-expired' | 'unsupported' | 'timeout' | 'error';
   planName: string | null;
   windows: PlanUsageWindow[];
   credits: { balance: string | null; unlimited: boolean } | null;
-  source: 'live' | 'session-log' | null;
+  source: 'live' | 'session-log' | 'cli' | null;
   fetchedAt: string | null;
   message?: string;
 };
+
+type PlanUsageSnapshot = {
+  data: PlanUsageData;
+  serverTimeMs: number;
+  receivedAtMs: number;
+};
+
+// Preserve the last successful result across modal unmounts; the server still
+// decides whether opening may use its five-minute cache or needs a fresh query.
+const lastSuccessfulUsage = new Map<string, PlanUsageSnapshot>();
 
 const PROVIDERS_WITH_PLAN_USAGE = new Set(['claude', 'codex']);
 
 type PlanUsageSectionProps = {
   provider: string | undefined;
 };
+
+const RESET_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
 
 const KNOWN_WINDOW_IDS = new Set(['five_hour', 'weekly', 'weekly_opus', 'weekly_sonnet']);
 
@@ -57,25 +71,45 @@ const formatDuration = (deltaMs: number) => {
  */
 export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
   const { t } = useTranslation('chat');
-  const [data, setData] = useState<PlanUsageData | null>(null);
+  // Advance the displayed age/countdown while open without querying usage again.
+  const [clockMs, setClockMs] = useState(() => performance.now());
+  useEffect(() => {
+    const clock = window.setInterval(() => setClockMs(performance.now()), 1000);
+    return () => window.clearInterval(clock);
+  }, []);
+  // Keep the last successful result while the user refreshes the panel.
+  const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(() => lastSuccessfulUsage.get(provider ?? '') ?? null);
+  // Disable overlapping refresh clicks and show progress.
   const [loading, setLoading] = useState(false);
+  // Distinguish transport failures from a CLI that cannot report subscription usage.
   const [failed, setFailed] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (forceRefresh = false) => {
     if (!provider || !PROVIDERS_WITH_PLAN_USAGE.has(provider)) {
       return;
     }
     setLoading(true);
     setFailed(false);
     try {
-      const response = await api.providers.planUsage(provider);
+      const response = await api.providers.planUsage(provider, forceRefresh);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       const payload = await response.json() as { data?: PlanUsageData };
-      setData(payload.data ?? null);
+      if (!payload.data || !Array.isArray(payload.data.windows)) {
+        throw new Error('Missing usage data');
+      }
+      // fetchedAt and resetsAt use the server clock. Comparing them to the
+      // device clock can turn a fresh query into '59 minutes ago'. Keep the
+      // response's server time with the cached result, then advance monotonically.
+      const responseTimeMs = Date.parse(response.headers.get('Date') ?? '');
+      const receivedAtMs = performance.now();
+      const next = { data: payload.data, receivedAtMs,
+        serverTimeMs: Number.isFinite(responseTimeMs) ? responseTimeMs : Date.now() };
+      if (payload.data.status === 'ok') lastSuccessfulUsage.set(provider, next);
+      setClockMs(receivedAtMs);
+      setSnapshot(next);
     } catch {
-      setData(null);
       setFailed(true);
     } finally {
       setLoading(false);
@@ -83,15 +117,18 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
   }, [provider]);
 
   useEffect(() => {
-    setData(null);
+    setSnapshot(lastSuccessfulUsage.get(provider ?? '') ?? null);
     void load();
-  }, [load]);
+  }, [load, provider]);
 
   if (!provider || !PROVIDERS_WITH_PLAN_USAGE.has(provider)) {
     return null;
   }
 
-  const nowMs = Date.now();
+  const data = snapshot?.data;
+  const nowMs = snapshot
+    ? snapshot.serverTimeMs + Math.max(0, clockMs - snapshot.receivedAtMs)
+    : 0;
   const windowLabel = (window: PlanUsageWindow) => {
     if (KNOWN_WINDOW_IDS.has(window.id)) {
       return t(`planUsage.windows.${window.id}`);
@@ -105,10 +142,15 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
     return t(`planUsage.duration.${unit}`, { count });
   };
 
+  const fetchedAgeMs = data?.fetchedAt ? nowMs - Date.parse(data.fetchedAt) : 0;
+  const fetchedAgeText = fetchedAgeMs < 60_000
+    ? t('planUsage.justNow')
+    : t('planUsage.ago', { duration: durationText(Math.floor(Math.max(0, fetchedAgeMs) / 60_000) * 60_000) });
+
   const unavailableMessage = failed
     ? t('planUsage.loadFailed')
     : data && data.status !== 'ok'
-      ? t(`planUsage.status.${data.status}`, { defaultValue: data.message ?? '' })
+      ? (t(`planUsage.status.${data.status}`, { defaultValue: data.message || t('planUsage.loadFailed') }) || t('planUsage.loadFailed'))
       : null;
 
   return (
@@ -129,13 +171,13 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
         </div>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => void load(true)}
           disabled={loading}
           aria-label={t('planUsage.refresh')}
           title={t('planUsage.refresh')}
           className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:opacity-50"
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          <RefreshCw className={`h-4 w-4${loading ? ' animate-spin' : ''}`} />
         </button>
       </div>
 
@@ -151,6 +193,7 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
         <div className="mt-4 space-y-3">
           {data.windows.map((window) => {
             const percent = Math.min(100, Math.max(0, window.usedPercent));
+            const resetMs = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
             return (
               <div key={window.id}>
                 <div className="flex items-baseline justify-between gap-3 text-xs">
@@ -171,9 +214,13 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
                   />
                 </div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {window.resetsAt
-                    ? t('planUsage.resetsIn', { duration: durationText(Date.parse(window.resetsAt) - nowMs) })
-                    : t('planUsage.windowReset')}
+                  {Number.isFinite(resetMs) ? (
+                    <>
+                      {t('planUsage.resetsIn', { duration: durationText(resetMs - nowMs) })}
+                      {' · '}
+                      <time dateTime={window.resetsAt!}>{RESET_TIME_FORMAT.format(resetMs)} UTC+8</time>
+                    </>
+                  ) : t('planUsage.windowReset')}
                 </p>
               </div>
             );
@@ -189,10 +236,15 @@ export default function PlanUsageSection({ provider }: PlanUsageSectionProps) {
             </p>
           )}
 
+          {data.source === 'session-log' && data.message && (
+            <p className="text-xs text-muted-foreground">{t('planUsage.cachedFallback')}</p>
+          )}
           {data.fetchedAt && (
             <p className="text-[11px] text-muted-foreground/80">
-              {data.source === 'session-log'
-                ? t('planUsage.updatedFromSession', { duration: durationText(nowMs - Date.parse(data.fetchedAt)) })
+              {data.source === 'cli'
+                ? t(provider === 'codex' ? 'planUsage.updatedFromCodexCli' : 'planUsage.updatedFromCli', { duration: fetchedAgeText })
+                : data.source === 'session-log'
+                ? t('planUsage.updatedFromSession', { duration: fetchedAgeText })
                 : t('planUsage.updatedLive')}
             </p>
           )}

@@ -10,10 +10,6 @@ type CodeEditorMediaPreviewProps = {
   // DB projectId used to build the raw-content URL; falls back to projectPath
   // for older callers, mirroring useCodeEditorDocument.
   projectId?: string;
-  isSidebar: boolean;
-  isFullscreen: boolean;
-  onClose: () => void;
-  onToggleFullscreen: () => void;
   labels: {
     loading: string;
     error: string;
@@ -39,10 +35,6 @@ export default function CodeEditorMediaPreview({
   file,
   kind,
   projectId,
-  isSidebar,
-  isFullscreen,
-  onClose,
-  onToggleFullscreen,
   labels,
 }: CodeEditorMediaPreviewProps) {
   const [url, setUrl] = useState<string | null>(null);
@@ -157,6 +149,7 @@ export default function CodeEditorMediaPreview({
           <img
             src={currentUrl}
             alt={file.name}
+            onError={() => { setUrl(null); setError(labels.error); }}
             className="max-h-full max-w-full object-contain"
           />
         );
@@ -168,7 +161,7 @@ export default function CodeEditorMediaPreview({
         return <iframe src={currentUrl} title={file.name} className="h-full w-full border-0 bg-white" />;
       case 'video':
         return (
-          <video src={currentUrl} controls className="max-h-full max-w-full" autoPlay={false}>
+          <video src={currentUrl} controls className="max-h-full max-w-full" autoPlay={false} onError={() => { setUrl(null); setError(labels.error); }}>
             {labels.error}
           </video>
         );
@@ -176,7 +169,7 @@ export default function CodeEditorMediaPreview({
         return (
           <div className="flex w-full max-w-xl flex-col items-center gap-4 px-6">
             <p className="max-w-full truncate text-sm text-muted-foreground">{file.name}</p>
-            <audio src={currentUrl} controls className="w-full">
+            <audio src={currentUrl} controls className="w-full" onError={() => { setUrl(null); setError(labels.error); }}>
               {labels.error}
             </audio>
           </div>
@@ -203,87 +196,14 @@ export default function CodeEditorMediaPreview({
     </div>
   );
 
-  const headerActions = (
-    <div className="flex shrink-0 items-center gap-0.5">
-      {canOpenInNewTab && currentUrl && (
-        <a
-          href={currentUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-          aria-label={labels.openInNewTab}
-          title={labels.openInNewTab}
-        >
-          <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
-        </a>
-      )}
-      {!isSidebar && (
-        <button
-          type="button"
-          onClick={onToggleFullscreen}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-          aria-label={isFullscreen ? labels.exitFullscreen : labels.fullscreen}
-          title={isFullscreen ? labels.exitFullscreen : labels.fullscreen}
-        >
-          {isFullscreen ? (
-            <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.5 3.5M9 15v4.5M9 15H4.5M9 15l-5.5 5.5M15 9h4.5M15 9V4.5M15 9l5.5-5.5M15 15h4.5M15 15v4.5m0-4.5l5.5 5.5" />
-            </svg>
-          ) : (
-            <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          )}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onClose}
-        className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-        aria-label={labels.close}
-        title={labels.close}
-      >
-        <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    </div>
-  );
-
-  const header = (
-    <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-3 py-1.5">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>
-      </div>
-      {headerActions}
-    </div>
-  );
-
-  if (isSidebar) {
-    return (
-      <div className="flex h-full w-full flex-col bg-background">
-        {header}
-        {previewBody}
-      </div>
-    );
-  }
-
-  const containerClassName = isFullscreen
-    ? 'fixed inset-0 z-[9999] bg-background flex flex-col'
-    : 'fixed inset-0 z-[9999] md:bg-black/50 md:flex md:items-center md:justify-center md:p-4';
-
-  const innerClassName = isFullscreen
-    ? 'bg-background flex flex-col w-full h-full'
-    : 'bg-background shadow-2xl flex flex-col w-full h-full md:rounded-lg md:shadow-2xl md:w-full md:max-w-6xl md:h-[80vh] md:max-h-[80vh]';
-
   return (
-    <div className={containerClassName}>
-      <div className={innerClassName}>
-        {header}
-        {previewBody}
-      </div>
+    <div className="relative h-full min-h-0">
+      {canOpenInNewTab && currentUrl && (
+        <a href={currentUrl} target="_blank" rel="noopener noreferrer"
+          className="absolute right-3 top-3 z-10 rounded-md border bg-background px-3 py-2 text-xs"
+          aria-label={labels.openInNewTab}>{labels.openInNewTab}</a>
+      )}
+      {previewBody}
     </div>
   );
 }

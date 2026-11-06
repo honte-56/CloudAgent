@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import '@xterm/xterm/css/xterm.css';
 import type { Project, ProjectSession } from '@/shared/types';
 import { useShellRuntime } from '@/modules/shell/hooks/useShellRuntime';
+import { SessionExecutionNotice } from '@/shared/ui/SessionExecutionNotice';
 import { sendSocketMessage } from '@/modules/shell/utils/socket';
 import { getSessionTitle } from '@/shared/utils';
 import { readSelectedProvider } from '@/shared/selectedProvider';
@@ -264,15 +265,16 @@ export default function Shell({
 
   if (minimal) {
     return (
-      <>
-        <ShellMinimalView terminalContainerRef={terminalContainerRef} />
+      <div className="flex h-full min-h-0 w-full flex-col">
+        {!isPlainShell && <SessionExecutionNotice sessionId={selectedSession?.id} target="terminal" onReleased={handleRestartShell} />}
+        <div className="min-h-0 flex-1"><ShellMinimalView terminalContainerRef={terminalContainerRef} /></div>
         <TerminalShortcutsPanel
           wsRef={wsRef}
           terminalRef={terminalRef}
           isConnected={isConnected}
           bottomOffset="bottom-0"
         />
-      </>
+      </div>
     );
   }
 
@@ -324,6 +326,7 @@ export default function Shell({
         )}
       />
 
+      {!isPlainShell && <SessionExecutionNotice sessionId={selectedSession?.id} target="terminal" onReleased={handleRestartShell} />}
       <div className="relative flex-1 overflow-hidden p-2">
         <div
           ref={terminalContainerRef}

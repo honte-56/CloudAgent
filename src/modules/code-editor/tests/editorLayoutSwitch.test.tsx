@@ -150,8 +150,9 @@ test('the pop-out button keeps the unsaved buffer and the dirty dot', async () =
   assert.equal(toolbarPanels.at(-1)?.isSidebar, false);
   assert.equal(toolbarPanels.at(-1)?.onPopOut, null);
   assert.equal(toolbarPanels.at(-1)?.onToggleExpand, null);
-  assert.ok(screen.getByTitle('actions.fullscreen'));
-  assert.ok(screen.getByTitle('actions.close'));
+  fireEvent.click(screen.getByTitle('More actions'));
+  assert.ok(screen.getByRole('menuitem', { name: 'Fullscreen' }));
+  assert.ok(screen.getByTitle('Close'));
 });
 
 test('a container too narrow to split pops the editor out without losing edits', async () => {

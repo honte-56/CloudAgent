@@ -101,6 +101,14 @@ export type ProviderModelsDefinition = {
    * library offers the same levels on every machine. Adapter catalogs omit it.
    */
   EFFORT_LEVELS?: string[];
+  /**
+   * The user's "use only my models" flag for this provider, set by the
+   * Providers service on merged catalogs. While it is true and at least one
+   * custom model exists, `OPTIONS` holds only custom models and `DEFAULT` is
+   * the first of them; with no custom models the built-ins are listed anyway.
+   * Adapter catalogs omit it.
+   */
+  CUSTOM_MODELS_ONLY?: boolean;
 };
 
 /**
@@ -226,16 +234,17 @@ export type MessageKind =
  * Event kinds added by the chat gateway layer on top of provider message kinds.
  *
  * These are app-level realtime events (subscription acks, sidebar deltas,
- * project loading progress, protocol failures) that are not produced by any
- * provider adapter. Together with `MessageKind` they form the complete set of
- * `kind` values a websocket client can receive, so the frontend only ever
- * needs one kind-based switch.
+ * project loading progress, protocol failures, scheduled-message changes) that
+ * are not produced by any provider adapter. Together with `MessageKind` they
+ * form the complete set of `kind` values a websocket client can receive, so
+ * the frontend only ever needs one kind-based switch.
  */
 export type GatewayEventKind =
   | 'chat_subscribed'
   | 'session_upserted'
   | 'loading_progress'
-  | 'protocol_error';
+  | 'protocol_error'
+  | 'scheduled_messages_changed';
 
 /**
  * Complete set of `kind` values emitted to websocket clients.
@@ -307,6 +316,15 @@ export type CompactionInfo = {
 };
 
 export type NormalizedMessage = {
+  /** Lifecycle changes require rereading the native parent timeline, without rendering a new message. */
+  historyChanged?: boolean;
+  /** Stable provider item/block identity shared by stream snapshots and persisted history. */
+  messageKey?: string;
+  /** True when a stream frame carries the complete text so far, safe to replace/replay. */
+  streamSnapshot?: boolean;
+  /** Durable delivery sequence of the first frame, retained while a message grows. */
+  firstSeq?: number;
+
   id: string;
   /**
    * The provider's own identifier for the transcript row this message came
@@ -315,6 +333,8 @@ export type NormalizedMessage = {
    * has to survive a reload — never a value this app synthesized.
    */
   transcriptAnchorId?: string;
+  /** Native boundary of the completed turn retained by a fork; independent of the edit anchor. */
+  forkAnchorId?: string;
   sessionId: string;
   timestamp: string;
   provider: LLMProvider;
@@ -328,6 +348,8 @@ export type NormalizedMessage = {
   seq?: number;
   role?: 'user' | 'assistant';
   content?: string;
+  /** True once injected runtime context has been removed; prevents double stripping in old/new client transitions. */
+  runtimeContextStripped?: boolean;
   /**
    * The model that produced this assistant message, as the provider reported
    * it on the transcript row (today: Claude's `message.model`, e.g.
@@ -654,6 +676,23 @@ export type ProviderRunFunction = (
   writer: ProviderRuntimeWriter,
 ) => Promise<unknown>;
 
+//----------------- SESSION EXECUTION OWNERSHIP ------------
+/** Public identity of the one chat or terminal executor for a conversation. The opaque id prevents a stale takeover from stopping a replacement. */
+export type SessionExecutionOwner = {
+  id: string;
+  sessionId: string;
+  provider: string;
+  kind: 'chat' | 'terminal';
+  stopping: boolean;
+};
+
+/** A server-only reservation acquired before a chat is acknowledged or history is edited. Release unused reservations; run retains ownership until the provider exits. */
+export type ProviderRunReservation = {
+  run: ProviderRunFunction;
+  release(): void;
+};
+// ---------------------------
+
 /**
  * Shared options used to fetch historical provider messages.
  *
@@ -667,6 +706,8 @@ export type ProviderRunFunction = (
  * app-allocated id that the provider has never seen.
  */
 export type FetchHistoryOptions = {
+  /** Exclusive stable message identity for loading older history while new rows arrive. */
+  before?: string;
   projectPath?: string;
   limit?: number | null;
   offset?: number;
@@ -679,6 +720,12 @@ export type FetchHistoryOptions = {
  * Use this as the contract for APIs that return paginated conversation history.
  */
 export type FetchHistoryResult = {
+  /** Oldest identity in this page; use as the exclusive before cursor. */
+  oldestCursor?: string;
+  /** Delivery watermark captured after this history read; not a persistence acknowledgement. */
+  realtimeCursor?: number;
+  /** Latest destructive transcript edit, used to discard superseded cached rows. */
+  timelineRevision?: number;
   messages: NormalizedMessage[];
   total: number;
   hasMore: boolean;
@@ -902,6 +949,12 @@ export type ProviderAuthSubscriptionOverride = {
 export type ProviderAuthStatus = {
   installed: boolean;
   provider: LLMProvider;
+  /**
+   * Version of the CLI the provider runs, as its `--version` printed it
+   * (`2.1.295`, `2026.07.20-8cc9c0b`), or null when it is not installed or
+   * printed no version.
+   */
+  installedVersion: string | null;
   authenticated: boolean;
   email: string | null;
   method: string | null;
@@ -912,6 +965,20 @@ export type ProviderAuthStatus = {
    * existing consumers that never look for it are unaffected.
    */
   subscriptionOverride?: ProviderAuthSubscriptionOverride;
+};
+
+/**
+ * What running a CLI's `--version` revealed, as returned by `probeCliVersion`.
+ *
+ * `installed` says only that the command could be started (or started and was
+ * too slow to answer); it ignores the exit code, which is reported separately
+ * for callers that also require a clean exit. `version` is null whenever the
+ * command did not exit 0 or printed nothing that looks like a version.
+ */
+export type CliVersionProbe = {
+  installed: boolean;
+  exitCode: number | null;
+  version: string | null;
 };
 
 // ---------------------------
@@ -1614,4 +1681,38 @@ export type CliApplication = {
  */
 export type SandboxCommandService = {
   execute(argumentsList: string[]): Promise<number>;
+};
+
+//----------------- PROJECT CREATION AUTHENTICATION ------------
+/** Authenticated selection persisted with a new project, independent of repository cloning. */
+export type ProjectGithubCredentialSelection = { userId: number; credentialId: number | null; inlineToken: string | null };
+
+//----------------- NATIVE PENDING INPUT ------------
+/** One input acknowledged by a provider's own queue, shared by runtime adapters and the HTTP queue service. IDs address individual entries, never an entire session slot. */
+export type NativeQueuedMessage = { id: string; content: string; attachments: import('./image-attachments.js').ChatAttachmentDescriptor[]; deliveryError?: string };
+
+//----------------- CODEX CLIENT INTERACTION ------------
+/** Runtime handler for inbound Codex JSON-RPC requests. Return true only when the request is retained or answered; reply must contain the method's native response payload. */
+export type CodexServerRequestHandler = (method: string, params: AnyRecord, reply: (result: AnyRecord) => void, nativeId: string | number) => boolean;
+
+//----------------- TASK PROGRESS PANEL ------------
+/** Read-only task progress snapshot. Targets are resolved from the parent's recorded launch, never from a client-supplied path or guessed session. */
+export type TaskProgressSnapshot = {
+  parentSessionId: string;
+  toolUseId: string;
+  title: string;
+  provider: LLMProvider;
+  kind: 'conversation' | 'agent' | 'workflow' | 'command';
+  status: string;
+  childSessionId?: string;
+  messages?: NormalizedMessage[];
+  totalMessages?: number;
+  activity?: SubagentActivity[];
+  activityCount?: number;
+  agents?: Array<{ id: string; label?: string; status: string }>;
+  selectedAgentId?: string;
+  output?: string;
+  outputTruncated?: boolean;
+  notice?: string;
+  updatedAt: string;
 };

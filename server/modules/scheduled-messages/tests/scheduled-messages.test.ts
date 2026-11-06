@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import { closeConnection, initializeDatabase, scheduledMessagesDb, sessionDraftsDb, sessionsDb, userDb } from '@/modules/database/index.js';
-import { dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
+import { closeScheduledMessageDispatcher, initializeScheduledMessageDispatcher, dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
-import { chatRunRegistry } from '@/modules/websocket/index.js';
+import type { ProviderRuntimeGateway } from '@/modules/websocket/index.js';
+import { chatRunRegistry, connectedClients } from '@/modules/websocket/index.js';
 
 const SESSION_ID = 'scheduled-session';
 
@@ -17,6 +18,7 @@ async function withIsolatedDatabase(runTest: (userId: number) => void | Promise<
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   try {
@@ -25,6 +27,7 @@ async function withIsolatedDatabase(runTest: (userId: number) => void | Promise<
     await runTest(Number(user.id));
   } finally {
     chatRunRegistry.clearAll();
+    connectedClients.clear();
     closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
@@ -57,6 +60,27 @@ function createRuntime(
       return true;
     },
   } as never;
+}
+
+/** A chat socket that records what it is sent, standing in for an open browser tab. */
+class FakeConnection {
+  readyState = 1; // WS_OPEN_STATE
+  frames: Array<Record<string, unknown>> = [];
+
+  send(data: string): void {
+    this.frames.push(JSON.parse(data) as Record<string, unknown>);
+  }
+
+  /** The scheduled-message announcements among everything this socket received. */
+  announcements(): Array<Record<string, unknown>> {
+    return this.frames.filter((frame) => frame.kind === 'scheduled_messages_changed');
+  }
+}
+
+function openTab(): FakeConnection {
+  const connection = new FakeConnection();
+  connectedClients.add(connection as never);
+  return connection;
 }
 
 test('a message due in the past is sent on the next pass, not skipped', async () => {
@@ -123,40 +147,51 @@ test('a queued message stays pending while its session is busy', async () => {
   });
 });
 
-test('a queued message waits for background work its session\'s last turn left running', async () => {
+
+test('a queued follow-up enters the held process without waiting for its monitor or replacing it', async () => {
   await withIsolatedDatabase(async (userId) => {
-    sessionDraftsDb.saveDraft(userId, SESSION_ID, {
-      text: '',
-      queuedMessage: { content: 'send after the background job' },
-    });
-    // Turn A ended, so its run is completed, but it backgrounded a command
-    // that is still running under A's CLI process.
-    const runA = chatRunRegistry.startRun({
-      appSessionId: SESSION_ID,
-      provider: 'claude',
-      providerSessionId: null,
-      connection: null,
-      userId,
-    });
-    runA!.writer.sendComplete({ exitCode: 0 });
-    assert.equal(chatRunRegistry.isProcessing(SESSION_ID), false);
-
-    let backgroundWork = true;
-    const runs: RunCall[] = [];
-    const runtime = createRuntime(runs, 'ok', [], (sessionId) => sessionId === SESSION_ID && backgroundWork);
-
-    // Starting B now would replace that process and stop the command.
-    assert.equal(await dispatchQueuedMessages(runtime), 0);
-    assert.equal(runs.length, 0);
-    assert.deepEqual(sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage, {
-      content: 'send after the background job',
-    });
-
-    // Once the work has reported back, B goes on the next pass.
-    backgroundWork = false;
+    sessionDraftsDb.saveDraft(userId, SESSION_ID, { text: '', queuedMessage: { content: 'progress?', attachments: [] } });
+    const run = chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'claude', providerSessionId: null, connection: null, userId });
+    run!.writer.sendComplete({ exitCode: 0 });
+    let replacements = 0;
+    const inputs: string[] = [];
+    const runtime = {
+      hasRuntime: () => true, hasBackgroundWork: () => true, canSteer: () => true,
+      run: async () => { replacements++; },
+      steer: async (_id: string, content: string) => { inputs.push(content); },
+    } as never;
     assert.equal(await dispatchQueuedMessages(runtime), 1);
-    assert.equal(runs.length, 1);
-    assert.equal(runs[0].command, 'send after the background job');
+    assert.deepEqual(inputs, ['progress?']);
+    assert.equal(replacements, 0);
+    assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
+  });
+});
+
+test('an unconfirmed follow-up stays visible and is not silently retried', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.saveDraft(userId, SESSION_ID, { text: '', queuedMessage: { content: 'only once' } });
+    let attempts = 0;
+    const runtime = {
+      hasRuntime: () => true, hasBackgroundWork: () => true, canSteer: () => true,
+      steer: async () => { attempts++; throw new Error('Delivery uncertain'); },
+    } as never;
+    assert.equal(await dispatchQueuedMessages(runtime), 1);
+    assert.deepEqual(sessionDraftsDb.getDrafts(userId)[0].queuedMessage, {
+      content: 'only once', options: {}, attachments: [], deliveryError: 'Delivery uncertain',
+    });
+    assert.equal(await dispatchQueuedMessages(runtime), 0);
+    assert.equal(attempts, 1);
+  });
+});
+
+test('a queued message resumes a proven closed input instead of being permanently blocked by its background flag', async () => {
+  await withIsolatedDatabase(async userId => {
+    sessionDraftsDb.saveDraft(userId, SESSION_ID, { text: '', queuedMessage: { content: 'resume with this question' } });
+    const runs: RunCall[] = [];
+    const runtime = { ...createRuntime(runs) as unknown as ProviderRuntimeGateway, hasBackgroundWork: () => true, canSteer: () => false,
+      prepareInput: async () => 'resume' as const };
+    assert.equal(await dispatchQueuedMessages(runtime), 1);
+    assert.equal(runs[0].command, 'resume with this question');
     assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
   });
 });
@@ -350,5 +385,189 @@ test('scheduling validates its input', async () => {
       () => scheduledMessagesService.schedule({ ...base, sessionId: 'nope', content: 'hi' }),
       (error: Error & { code?: string }) => error.code === 'SESSION_NOT_FOUND',
     );
+  });
+});
+
+
+test('a held provider promise cannot lock subsequent queue polls', async (t) => {
+  await withIsolatedDatabase(async userId => {
+    sessionsDb.createAppSession('second-session', 'claude', '/tmp/queue-second');
+    scheduledMessagesService.schedule({ userId, sessionId: SESSION_ID, content: 'held', scheduledFor: new Date(Date.now() - 1000).toISOString() });
+    let poll: (() => void) | undefined;
+    const interval = globalThis.setInterval;
+    t.mock.method(globalThis, 'setInterval', (callback: () => void, ms: number) => {
+      poll = callback;
+      return interval(callback, ms);
+    });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const commands: string[] = [];
+    const runtime = {
+      hasRuntime: () => true, hasBackgroundWork: () => false,
+      run: async (_provider: string, command: string) => { commands.push(command); if (command === 'held') await held; },
+    } as never;
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+    try {
+      initializeScheduledMessageDispatcher(runtime);
+      await settle();
+      assert.deepEqual(commands, ['held']);
+      sessionDraftsDb.saveDraft(userId, 'second-session', { text: '', queuedMessage: { content: 'next poll' } });
+      poll!();
+      await settle();
+      assert.deepEqual(commands, ['held', 'next poll']);
+      assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
+    } finally {
+      closeScheduledMessageDispatcher(); release(); await settle();
+    }
+  });
+});
+
+
+test('terminal ownership preserves a queued message until handoff without a duplicate run', async () => {
+  await withIsolatedDatabase(async userId => {
+    sessionDraftsDb.saveDraft(userId, SESSION_ID, { text: '', queuedMessage: { content: 'after takeover' } });
+    const runs: RunCall[] = [];
+    let terminalOwned = true;
+    const runtime: ProviderRuntimeGateway = { ...createRuntime(runs) as unknown as ProviderRuntimeGateway,
+      getExecutionOwner: () => terminalOwned ? { id: 'terminal', sessionId: SESSION_ID, provider: 'claude', kind: 'terminal', stopping: false } : null };
+    assert.equal(await dispatchQueuedMessages(runtime), 0);
+    assert.equal(runs.length, 0);
+    assert.deepEqual(sessionDraftsDb.getDrafts(userId)[0].queuedMessage, { content: 'after takeover' });
+    terminalOwned = false;
+    assert.equal(await dispatchQueuedMessages(runtime), 1);
+    assert.equal(runs.length, 1);
+    assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
+  });
+});
+
+// The composer banner is read over REST, so these announcements are the only
+// way an open tab learns that its list changed without it doing anything
+// (#1546): the banner of a message the timer had already sent stayed up until
+// a reload.
+
+test('a due message is announced to open tabs as it is claimed, before its turn runs', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    scheduledMessagesService.schedule({
+      userId,
+      sessionId: SESSION_ID,
+      content: 'run the nightly checks',
+      scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+    });
+    const tab = openTab();
+
+    let announcedBeforeTheTurn: Array<Record<string, unknown>> = [];
+    const runtime = {
+      hasRuntime: () => true,
+      hasBackgroundWork: () => false,
+      run: async () => {
+        announcedBeforeTheTurn = tab.announcements();
+      },
+      abort: async () => true,
+    } as never;
+    assert.equal(await dispatchDueScheduledMessages(runtime), 1);
+
+    // The banner comes down when the turn starts, not after it finishes,
+    // which for a long turn can be many minutes later.
+    assert.equal(announcedBeforeTheTurn.length, 1);
+    assert.equal(announcedBeforeTheTurn[0].sessionId, SESSION_ID);
+    assert.equal(tab.announcements().length, 1);
+  });
+});
+
+test('a pass announces each session it claimed from once, however many of its messages were due', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    const otherSessionId = 'other-scheduled-session';
+    sessionsDb.createAppSession(otherSessionId, 'claude', tmpdir(), 'Other scheduled session');
+    for (const [sessionId, content] of [
+      [SESSION_ID, 'first for this session'],
+      [SESSION_ID, 'second for this session'],
+      [otherSessionId, 'only one for the other session'],
+    ]) {
+      scheduledMessagesService.schedule({
+        userId,
+        sessionId,
+        content,
+        scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+      });
+    }
+    const tab = openTab();
+
+    assert.equal(await dispatchDueScheduledMessages(createRuntime([])), 3);
+
+    // One read per session is enough: a single GET returns all of its rows.
+    assert.deepEqual(tab.announcements().map((frame) => frame.sessionId).sort(), [otherSessionId, SESSION_ID]);
+  });
+});
+
+test('a message that fails to send is announced again once the reason is recorded', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    scheduledMessagesService.schedule({
+      userId,
+      sessionId: SESSION_ID,
+      content: 'will fail',
+      scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+    });
+    const tab = openTab();
+
+    await dispatchDueScheduledMessages(createRuntime([], 'throw'));
+
+    // Claimed (the banner comes down), then failed (it comes back as the
+    // failure notice).
+    assert.deepEqual(tab.announcements().map((frame) => frame.sessionId), [SESSION_ID, SESSION_ID]);
+    assert.equal(scheduledMessagesDb.listForSession(userId, SESSION_ID)[0].status, 'failed');
+  });
+});
+
+test('scheduling and cancelling are announced, so other tabs and devices follow', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    const tab = openTab();
+
+    const scheduled = scheduledMessagesService.schedule({
+      userId,
+      sessionId: SESSION_ID,
+      content: 'from another tab',
+      scheduledFor: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    assert.equal(tab.announcements().length, 1);
+
+    scheduledMessagesService.cancel(userId, scheduled.id);
+    assert.equal(tab.announcements().length, 2);
+
+    // A refused cancel changed nothing, so there is nothing to announce.
+    assert.throws(() => scheduledMessagesService.cancel(userId, scheduled.id));
+    assert.equal(tab.announcements().length, 2);
+
+    // The frame names the session and nothing else: each tab reads the list
+    // again through its own authenticated request.
+    for (const frame of tab.announcements()) {
+      assert.deepEqual(Object.keys(frame).sort(), ['kind', 'sessionId', 'timestamp']);
+      assert.equal(frame.sessionId, SESSION_ID);
+    }
+  });
+});
+
+test('a socket that cannot be written to does not stop a claimed message from being sent', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    scheduledMessagesService.schedule({
+      userId,
+      sessionId: SESSION_ID,
+      content: 'still goes',
+      scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+    });
+    const closedTab = openTab();
+    closedTab.readyState = 3; // CLOSED
+    connectedClients.add({
+      readyState: 1,
+      send: () => {
+        throw new Error('socket went away mid-send');
+      },
+    } as never);
+
+    const runs: RunCall[] = [];
+    assert.equal(await dispatchDueScheduledMessages(createRuntime(runs)), 1);
+
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].command, 'still goes');
+    assert.equal(closedTab.frames.length, 0);
   });
 });

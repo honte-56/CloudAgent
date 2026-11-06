@@ -130,6 +130,18 @@ export const projectsDb = {
         `).run(randomUUID(), normalizedProjectPath, customProjectName);
     },
 
+    /** Projects settings uses this inside a transaction; transcript files retain their original paths. */
+    updateProjectDirectory(projectId: string, projectPath: string): void {
+        const db = getConnection();
+        const previous = projectsDb.getProjectPathById(projectId);
+        db.pragma('defer_foreign_keys = ON');
+        db.prepare(`INSERT INTO session_project_bindings (session_id, project_id)
+          SELECT session_id, ? FROM sessions WHERE project_path = ?
+          ON CONFLICT(session_id) DO UPDATE SET project_id = excluded.project_id`).run(projectId, previous);
+        db.prepare('UPDATE projects SET project_path = ? WHERE project_id = ?').run(projectPath, projectId);
+        db.prepare('UPDATE sessions SET project_path = ? WHERE project_path = ?').run(projectPath, previous);
+    },
+
     updateCustomProjectNameById(projectId: string, customProjectName: string | null): void {
         const db = getConnection();
         db.prepare(`

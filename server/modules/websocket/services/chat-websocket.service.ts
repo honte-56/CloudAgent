@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { retainAttachmentUploads } from '@/modules/assets/index.js';
 
 import type { WebSocket } from 'ws';
 
@@ -8,7 +8,6 @@ import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.
 import { acknowledgeChatSend, withChatReceipt } from '@/modules/websocket/services/chat-receipts.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import {
-  getGlobalImageAssetsDir,
   isImageAttachmentDescriptor,
   normalizeAttachmentDescriptors,
   type ChatAttachmentDescriptor,
@@ -19,42 +18,37 @@ import type {
   LLMProvider,
   ProviderPermissionDecision,
   ProviderRuntimeWriter,
+  ProviderRunReservation,
+  SessionExecutionOwner,
 } from '@/shared/types.js';
-import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { filterAttachmentsToUploadStore, parseIncomingJsonObject } from '@/shared/utils.js';
 
-/**
- * Trust boundary for client-supplied image attachments: chat.send options come
- * straight from the browser, and the provider runtimes read the referenced
- * files off disk (Claude base64-encodes them into the prompt). Only images
- * that live directly inside the global upload store (`~/.cloudcli/assets`,
- * where POST /api/assets/images puts them) are allowed through — anything
- * else (absolute paths elsewhere, traversal, subdirectories) is dropped.
- *
- * Exported for tests; `assetsRootOverride` exists only for them.
- */
-export function filterAttachmentsToUploadStore(
-  attachments: unknown,
-  assetsRootOverride?: string,
-): ChatAttachmentDescriptor[] {
-  const assetsRoot = path.resolve(assetsRootOverride ?? getGlobalImageAssetsDir());
+// One cancellation per run, shared by repeated Stop requests and dispatch
+// cleanup. Weak keys keep a cancelled run's outcome from affecting later runs.
+const pendingRunAborts = new WeakMap<NonNullable<ReturnType<typeof chatRunRegistry.getRun>>, Promise<boolean>>();
 
-  return normalizeAttachmentDescriptors(attachments).filter((descriptor) => {
-    // Relative paths are anchored in the store; absolute ones must already be in it.
-    const resolved = path.resolve(assetsRoot, descriptor.path);
-    const relative = path.relative(assetsRoot, resolved);
-    const isDirectChild =
-      relative.length > 0 &&
-      !relative.startsWith('..') &&
-      !path.isAbsolute(relative) &&
-      !relative.includes(path.sep) &&
-      !relative.includes('/');
-
-    if (!isDirectChild) {
-      console.warn(`[Chat] Dropping attachment outside the upload store: ${descriptor.path}`);
-    }
-    return isDirectChild;
-  });
+/** Coordinates cancellation with a dispatch that may settle before ownership releases. */
+function abortRegisteredRun(
+  run: ReturnType<typeof chatRunRegistry.getRun>,
+  provider: LLMProvider,
+  sessionId: string,
+  dependencies: ChatWebSocketDependencies,
+): Promise<boolean> {
+  if (!run) return dependencies.runtime.abort(provider, sessionId);
+  const existing = pendingRunAborts.get(run);
+  if (existing) return existing;
+  // Register before invoking the runtime, which can synchronously settle its run.
+  const pending = Promise.resolve().then(() => dependencies.runtime.abort(provider, sessionId));
+  pendingRunAborts.set(run, pending);
+  void pending.then(
+    (success) => { if (!success) pendingRunAborts.delete(run); },
+    () => { pendingRunAborts.delete(run); },
+  );
+  return pending;
 }
+
+// Kept for existing gateway consumers; HTTP live input uses the same boundary.
+export { filterAttachmentsToUploadStore } from '@/shared/utils.js';
 
 /** Backward-compatible image filter consumed by existing websocket tests. */
 export function filterImagesToUploadStore(
@@ -67,6 +61,8 @@ export function filterImagesToUploadStore(
 /** Application boundary for dispatching provider runs and approvals. */
 export type ProviderRuntimeGateway = {
   hasRuntime(provider: string): boolean;
+  reserveRun?(provider: LLMProvider, sessionId: string): ProviderRunReservation;
+  getExecutionOwner?(sessionId: string): SessionExecutionOwner | null;
   run(
     provider: LLMProvider,
     command: string,
@@ -77,6 +73,10 @@ export type ProviderRuntimeGateway = {
   stopBackgroundTask(provider: LLMProvider, sessionId: string, taskId: string): Promise<boolean>;
   /** Whether a provider runtime still holds background work for the session after its turn ended. */
   hasBackgroundWork(sessionId: string): boolean;
+  /** Reuses an owned input stream; absence means this provider cannot append. */
+  steer?(sessionId: string, content: string, attachments?: unknown[]): Promise<void>;
+  canSteer?(sessionId: string): boolean;
+  prepareInput?(sessionId: string): Promise<'live' | 'resume'>;
   resolveToolApproval(requestId: string, payload: ProviderPermissionDecision): void;
   getPendingApprovalsForSession(sessionId: string): unknown[];
 };
@@ -126,7 +126,8 @@ function sendProtocolError(
   ws: WebSocket,
   code: string,
   error: string,
-  sessionId?: string
+  sessionId?: string,
+  extra: AnyRecord = {}
 ): void {
   sendJson(ws, {
     kind: 'protocol_error',
@@ -134,6 +135,7 @@ function sendProtocolError(
     error,
     sessionId: sessionId ?? null,
     timestamp: new Date().toISOString(),
+    ...extra,
   });
 }
 
@@ -158,6 +160,24 @@ async function handleChatSend(
     return;
   }
 
+  // A monitor can finish just before its notification starts the next one.
+  // An empty task list must not replace an input-capable CLI in that gap.
+  if (!chatRunRegistry.isProcessing(resolved.sessionId)
+    && (dependencies.runtime.hasBackgroundWork(resolved.sessionId) || dependencies.runtime.canSteer?.(resolved.sessionId))) {
+    try {
+      const mode = await dependencies.runtime.prepareInput?.(resolved.sessionId) ?? 'live';
+      if (mode === 'live') {
+        if (!dependencies.runtime.steer) throw new Error('This provider does not support live input.');
+        await retainAttachmentUploads(filterAttachmentsToUploadStore(data.options?.attachments ?? []), Number(userId));
+        await dependencies.runtime.steer(resolved.sessionId, typeof data.content === 'string' ? data.content : '', data.options?.attachments ?? []);
+        acknowledgeChatSend(data);
+        return;
+      }
+    } catch (error) {
+      sendProtocolError(ws, 'LIVE_INPUT_FAILED', error instanceof Error ? error.message : String(error), resolved.sessionId);
+      return;
+    }
+  }
   await dispatchRun(ws, userId, resolved.sessionId, resolved.session, data, dependencies);
 }
 
@@ -218,8 +238,18 @@ async function dispatchRun(
   dependencies: ChatWebSocketDependencies,
   extraRuntimeOptions: AnyRecord = {},
   beforeRun?: (run: NonNullable<ReturnType<typeof chatRunRegistry.startRun>>) => void | Promise<void>,
+  onAccepted?: () => void,
 ): Promise<{ started: boolean; error: string | null }> {
   const provider = session.provider as LLMProvider;
+
+  let reservation: ProviderRunReservation | undefined;
+  try {
+    if (!chatRunRegistry.isProcessing(sessionId)) reservation = dependencies.runtime.reserveRun?.(provider, sessionId);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (ws) sendProtocolError(ws, 'SESSION_OWNED', detail, sessionId);
+    return { started: false, error: detail };
+  }
 
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,
@@ -230,6 +260,7 @@ async function dispatchRun(
   });
 
   if (!run) {
+    reservation?.release();
     if (ws) {
       sendProtocolError(
         ws,
@@ -241,67 +272,82 @@ async function dispatchRun(
     return { started: false, error: 'A run is already in progress for this session.' };
   }
 
-  const clientOptions = (data.options ?? {}) as AnyRecord;
-  const command = typeof data.content === 'string' ? data.content : '';
-
-  // Record what this turn runs with so reopening the session later restores the
-  // same model and reasoning effort, and so the resume path has a
-  // session-scoped model answer to use.
-  if (typeof clientOptions.model === 'string' && clientOptions.model.trim()) {
-    providerModelsService.setSessionModel(provider, sessionId, clientOptions.model);
-  }
-  if (typeof clientOptions.effort === 'string' && clientOptions.effort.trim()) {
-    providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
-  }
-
-  const attachmentCandidates = [
-    ...normalizeAttachmentDescriptors(clientOptions.images),
-    ...normalizeAttachmentDescriptors(clientOptions.files),
-    ...normalizeAttachmentDescriptors(clientOptions.attachments),
-  ];
-  const verifiedAttachments = filterAttachmentsToUploadStore(attachmentCandidates);
-  const uniqueAttachments = verifiedAttachments.filter(
-    (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
-  );
-
-  // The provider runtimes receive the stable app session id. When their
-  // CLI/SDK needs the provider-native id for resume, they resolve it from the
-  // session row themselves (sessionsService.resolveProviderSessionId).
-  // Brand-new sessions have no provider id yet, so the runtime starts fresh
-  // and announces one, which the gateway writer captures and maps back to the
-  // app session id.
-  const runtimeOptions: AnyRecord = {
-    ...clientOptions,
-    ...extraRuntimeOptions,
-    // Attachments are re-validated server-side: only direct children of the
-    // global upload store may reach provider runtimes or their file tools.
-    attachments: uniqueAttachments,
-    images: uniqueAttachments.filter(isImageAttachmentDescriptor),
-    files: uniqueAttachments.filter((descriptor) => !isImageAttachmentDescriptor(descriptor)),
-    sessionId,
-    cwd: clientOptions.cwd ?? session.project_path ?? undefined,
-    projectPath: session.project_path ?? clientOptions.projectPath,
-  };
-
   let failure: string | null = null;
   try {
+    const clientOptions = (data.options ?? {}) as AnyRecord;
+    const command = typeof data.content === 'string' ? data.content : '';
+
+    // Record what this turn runs with so reopening the session later restores the
+    // same model and reasoning effort, and so the resume path has a
+    // session-scoped model answer to use.
+    if (typeof clientOptions.model === 'string' && clientOptions.model.trim()) {
+      providerModelsService.setSessionModel(provider, sessionId, clientOptions.model);
+    }
+    if (typeof clientOptions.effort === 'string' && clientOptions.effort.trim()) {
+      providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
+    }
+
+    const attachmentCandidates = [
+      ...normalizeAttachmentDescriptors(clientOptions.images),
+      ...normalizeAttachmentDescriptors(clientOptions.files),
+      ...normalizeAttachmentDescriptors(clientOptions.attachments),
+    ];
+    const verifiedAttachments = filterAttachmentsToUploadStore(attachmentCandidates);
+    const uniqueAttachments = verifiedAttachments.filter(
+      (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
+    );
+
+    // The provider runtimes receive the stable app session id. When their
+    // CLI/SDK needs the provider-native id for resume, they resolve it from the
+    // session row themselves (sessionsService.resolveProviderSessionId).
+    // Brand-new sessions have no provider id yet, so the runtime starts fresh
+    // and announces one, which the gateway writer captures and maps back to the
+    // app session id.
+    const runtimeOptions: AnyRecord = {
+      ...clientOptions,
+      ...extraRuntimeOptions,
+      // Attachments are re-validated server-side: only direct children of the
+      // global upload store may reach provider runtimes or their file tools.
+      attachments: uniqueAttachments,
+      images: uniqueAttachments.filter(isImageAttachmentDescriptor),
+      files: uniqueAttachments.filter((descriptor) => !isImageAttachmentDescriptor(descriptor)),
+      sessionId,
+      // A browser opened before a directory change must not restore the old cwd.
+      cwd: session.project_path ?? clientOptions.cwd ?? undefined,
+      projectPath: session.project_path ?? clientOptions.projectPath,
+    };
+
     // Runs only now that the session is reserved, because an edit rewinds the
     // conversation here and a rewind for a run that was never admitted cannot
     // be taken back. Inside the try so a rewind that throws still releases the
     // run instead of leaving the session processing forever.
     await beforeRun?.(run);
+    await retainAttachmentUploads(uniqueAttachments, Number(userId));
     acknowledgeChatSend(data);
-    await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
+    onAccepted?.();
+    if (reservation) await reservation.run(command, runtimeOptions, run.writer);
+    else await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     console.error(`[Chat] Provider runtime "${provider}" failed`, { sessionId, error: failure });
   } finally {
+    reservation?.release();
     // Safety net: a runtime that crashed (or resolved) without emitting its
     // terminal `complete` would otherwise leave the session stuck in
     // "processing" forever on every connected client. Scoped to THIS run —
     // a queued message can start the session's next run before this promise
     // settles, and the session-keyed completeRun would kill that new run.
-    chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+    const abort = pendingRunAborts.get(run);
+    if (abort) {
+      // Ownership release waits for this dispatch to settle. Do not await the
+      // abort here: defer its terminal outcome without creating a wait cycle.
+      void abort.then(
+        (success) => chatRunRegistry.completeRunIfCurrent(run, { exitCode: success ? 0 : 1, aborted: success }),
+        () => chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 }),
+      );
+    } else {
+      chatRunRegistry.completeRunIfCurrent(run, { exitCode: 1 });
+    }
   }
 
   return { started: true, error: failure };
@@ -429,14 +475,24 @@ async function handleChatAbort(
   }
 
   const run = chatRunRegistry.getRun(sessionId);
-  if (!run || run.status !== 'running') {
+  const session = sessionsDb.getSessionById(sessionId);
+  if ((!run || run.status !== 'running') && !dependencies.runtime.hasBackgroundWork(sessionId)
+    && !dependencies.runtime.getExecutionOwner?.(sessionId)) {
     sendProtocolError(ws, 'NO_ACTIVE_RUN', `Session "${sessionId}" has no active run.`, sessionId);
     return;
   }
 
-  const success = await dependencies.runtime.abort(run.provider, sessionId);
+  const provider = run?.provider ?? session?.provider as LLMProvider | undefined;
+  if (!provider) return;
+  const success = await abortRegisteredRun(run, provider, sessionId, dependencies);
+  if (!success) {
+    sendProtocolError(ws, 'ABORT_FAILED', 'The session could not be stopped. Its running state has been retained.', sessionId);
+    return;
+  }
 
-  chatRunRegistry.completeRun(sessionId, {
+  // Scoped to the run that was stopped: a stop can take a round trip, and a
+  // new run of the session may have started by the time it returns.
+  if (run) chatRunRegistry.completeRunIfCurrent(run, {
     exitCode: success ? 0 : 1,
     aborted: true,
   });
@@ -484,6 +540,8 @@ async function handleChatStopTask(
       'NO_SUCH_TASK',
       `Session "${sessionId}" has no running background task "${taskId}".`,
       sessionId,
+      // Names the task so the client can settle a chip whose end it missed.
+      { taskId },
     );
   }
 }
@@ -521,6 +579,9 @@ function handleChatSubscribe(
       : 0;
 
     const run = chatRunRegistry.getRun(sessionId);
+    // Flush before attaching the new socket: otherwise it can receive a suffix
+    // delta first and then reject the complete replay snapshot with the same seq.
+    run?.writer.flush();
     const isProcessing = chatRunRegistry.isProcessing(sessionId);
 
     // Future live events for this run should land on the socket that asked —
@@ -541,20 +602,25 @@ function handleChatSubscribe(
       kind: 'chat_subscribed',
       sessionId,
       isProcessing,
-      lastSeq: run?.lastSeq ?? 0,
+      lastSeq: chatRunRegistry.getCursor(sessionId),
+      resetCursor: lastSeq > chatRunRegistry.getCursor(sessionId),
+      historyRequired: true,
       pendingPermissions,
       timestamp: new Date().toISOString(),
     });
 
-    // Replay only for RUNNING runs, strictly after the ack. Completed runs
-    // are fully persisted to the provider transcript and served over REST —
-    // replaying them (e.g. after a page reload where the client's lastSeq is
-    // 0) would duplicate messages the history fetch already returned.
-    if (isProcessing) {
-      for (const event of chatRunRegistry.replayEvents(sessionId, lastSeq)) {
-        sendJson(ws, event);
-      }
+    // The ack owns current runtime/permission state. Historical control events
+    // must not idle a newer turn or reopen an already answered approval.
+    const cursor = chatRunRegistry.getCursor(sessionId);
+    const replayAfter = lastSeq > cursor ? 0 : lastSeq;
+    for (const event of chatRunRegistry.replayEvents(sessionId, replayAfter)) {
+      // Older builds incorrectly journaled Codex lifecycle signals as tools.
+      if (event.provider === 'codex' && (['subAgentActivity', 'SubAgentActivity'].includes(event.toolName || '')
+        || event.toolName === 'TodoWrite' && (event.toolId || event.id).endsWith('-plan'))) continue;
+      if (['complete', 'status', 'permission_request', 'permission_resolved', 'permission_cancelled', 'session_created'].includes(event.kind)) continue;
+      sendJson(ws, { ...event, isReplay: true });
     }
+    sendJson(ws, { kind: 'chat_replay_complete', sessionId, cursor, isProcessing });
   }
 }
 
@@ -616,6 +682,8 @@ export async function runDetachedChatTurn(
      * land mid-run, so the timer outranks whatever is running.
      */
     interruptActiveRun?: boolean;
+    /** Internal admission callback for an HTTP send that must not wait for the entire agent turn. */
+    onAccepted?: () => void;
   },
   dependencies: ChatWebSocketDependencies,
 ): Promise<{ started: boolean; error: string | null }> {
@@ -629,6 +697,22 @@ export async function runDetachedChatTurn(
     return { started: false, error: `Provider "${provider}" is not available.` };
   }
 
+  if (!chatRunRegistry.isProcessing(input.sessionId)
+    && (dependencies.runtime.hasBackgroundWork(input.sessionId) || dependencies.runtime.canSteer?.(input.sessionId))) {
+    try {
+      const mode = await dependencies.runtime.prepareInput?.(input.sessionId) ?? 'live';
+      if (mode === 'live') {
+        if (!dependencies.runtime.steer) throw new Error('This provider does not support live input.');
+        await retainAttachmentUploads(filterAttachmentsToUploadStore(input.options?.attachments ?? []), Number(input.userId));
+        await dependencies.runtime.steer(input.sessionId, input.content, input.options?.attachments ?? []);
+        input.onAccepted?.();
+        return { started: true, error: null };
+      }
+    } catch (error) {
+      return { started: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   const activeRun = chatRunRegistry.getRun(input.sessionId);
   if (activeRun && activeRun.status === 'running') {
     if (!input.interruptActiveRun) {
@@ -639,8 +723,8 @@ export async function runDetachedChatTurn(
     // interrupted run end before this turn's stream begins. The interrupted
     // run's own dispatch settles later through completeRunIfCurrent, which is
     // scoped to that run and cannot touch the one started here.
-    const aborted = await dependencies.runtime.abort(activeRun.provider, input.sessionId);
-    chatRunRegistry.completeRun(input.sessionId, {
+    const aborted = await abortRegisteredRun(activeRun, activeRun.provider, input.sessionId, dependencies);
+    chatRunRegistry.completeRunIfCurrent(activeRun, {
       exitCode: aborted ? 0 : 1,
       aborted: true,
     });
@@ -653,7 +737,22 @@ export async function runDetachedChatTurn(
     session,
     { sessionId: input.sessionId, content: input.content, options: input.options ?? {} },
     dependencies,
+    {},
+    undefined,
+    input.onAccepted,
   );
+}
+
+/** Used by Providers to resume a proven closed input and acknowledge admission without waiting for background work to finish. */
+export function startDetachedChatTurn(
+  input: Parameters<typeof runDetachedChatTurn>[0],
+  dependencies: ChatWebSocketDependencies,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    void runDetachedChatTurn({ ...input, onAccepted: resolve }, dependencies)
+      .then(result => { if (!result.started) reject(new Error(result.error ?? 'Could not resume the conversation.')); })
+      .catch(reject);
+  });
 }
 
 export function handleChatConnection(

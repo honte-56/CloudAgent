@@ -1,18 +1,36 @@
 import assert from 'node:assert/strict';
-import { act, renderHook, render, fireEvent } from '@testing-library/react';
+import { act, renderHook, render, fireEvent, waitFor } from '@testing-library/react';
 import { beforeEach, test, vi } from 'vitest';
 
 import { PromptInput } from '@/modules/chat/composer/PromptInput';
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
-import { readDraftText, resetChatDrafts } from '@/shared/chatDrafts';
+import { readDraftText, readQueuedMessage, writeQueuedMessage, resetChatDrafts } from '@/shared/chatDrafts';
 import type { ChatMessage, PermissionMode, Project } from '@/shared/types';
 
-const { steerSession, uploadFiles } = vi.hoisted(() => ({ steerSession: vi.fn(), uploadFiles: vi.fn() }));
+const { steerSession, uploadAttachment, native } = vi.hoisted(() => ({ steerSession: vi.fn(), uploadAttachment: vi.fn(), native: new Map<string, Array<any>>() }));
 vi.mock('@/shared/api', () => {
   const ok = (data: unknown) => Promise.resolve({ ok: true, json: async () => data });
   return { api: {
-    assets: { uploadFiles },
-    providers: { steerSession, skills: () => ok({ skills: [] }) },
+    assets: { uploadAttachment },
+    providers: {
+      steerSession, skills: () => ok({ skills: [] }),
+      nativeQueue: (session: string) => ok({ data: { messages: [...(native.get(session) ?? [])] } }),
+      enqueueNativeMessage: (session: string, content: string, attachments: unknown[], id: string) => {
+        const message = { id, content, attachments };
+        native.set(session, [...(native.get(session) ?? []), message]);
+        return ok({ data: { message } });
+      },
+      sendNativeQueuedMessage: async (session: string, id: string) => {
+        const entry = native.get(session)?.find(item => item.id === id);
+        const result = await steerSession(session, entry.content, entry.attachments, true);
+        if (result.ok) native.set(session, native.get(session)!.filter(item => item.id !== id));
+        return result;
+      },
+      deleteNativeQueuedMessage: (session: string, id: string) => {
+        native.set(session, (native.get(session) ?? []).filter(item => item.id !== id));
+        return ok({ data: { deleted: true } });
+      },
+    },
     user: { drafts: () => ok({ drafts: [] }), saveDraft: () => ok({}), deleteDraft: () => ok({}), preferences: () => ok({ preferences: {} }), savePreferences: () => ok({}) },
     commands: { list: () => ok({ commands: [] }) },
     files: { search: () => ok({ files: [] }) },
@@ -39,87 +57,106 @@ function composer(provider: 'codex' | 'claude' | 'cursor' = 'codex', background 
 }
 
 beforeEach(() => {
-  localStorage.clear(); resetChatDrafts(); steerSession.mockReset(); uploadFiles.mockReset();
+  localStorage.clear(); resetChatDrafts(); native.clear(); steerSession.mockReset(); uploadAttachment.mockReset();
+});
+
+async function queue(view: ReturnType<typeof composer>['view'], content: string) {
+  await act(async () => { view.result.current.setInput(content); });
+  await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
+}
+
+async function sendQueued(view: ReturnType<typeof composer>['view']) {
+  const entry = view.result.current.nativeQueuedMessages[0];
+  if (entry) await view.result.current.changeNativeQueuedMessage(entry, 'send');
+  else await view.result.current.handleSteer();
+}
+
+test('successive queued messages append in the native queue instead of overwriting the previous message', async () => {
+  const { view } = composer();
+  await queue(view, 'first');
+  await queue(view, 'second');
+  assert.deepEqual(view.result.current.nativeQueuedMessages.map(entry => entry.content), ['first', 'second']);
+  assert.equal(readQueuedMessage('session-a'), null, 'native inputs must not use the single draft slot');
+  await act(async () => { await view.result.current.changeNativeQueuedMessage(view.result.current.nativeQueuedMessages[0], 'delete'); });
+  assert.deepEqual(view.result.current.nativeQueuedMessages.map(entry => entry.content), ['second']);
+  view.unmount();
 });
 
 for (const provider of ['codex', 'claude'] as const) {
-test(`${provider} live input is acknowledged before the draft is cleared`, async () => {
-  let acknowledge!: (result: unknown) => void;
-  steerSession.mockReturnValue(new Promise((resolve) => { acknowledge = resolve; }));
-  const { view, messages } = composer(provider);
-  await act(async () => { view.result.current.setInput('change direction'); });
-  let pending!: Promise<void>;
-  act(() => { pending = view.result.current.handleSteer(); });
-  assert.equal(view.result.current.input, 'change direction');
-  assert.equal(messages.length, 0);
-  await act(async () => {
-    // Fast repeated clicks cannot send the same input twice.
-    await view.result.current.handleSteer();
-    acknowledge({ ok: true, json: async () => ({ data: { delivered: true } }) });
-    await pending;
-  });
-  assert.equal(steerSession.mock.calls.length, 1);
-  assert.deepEqual(steerSession.mock.calls[0], ['session-a', 'change direction']);
-  assert.equal(view.result.current.input, '');
-  assert.equal(readDraftText('session-a'), '');
-  assert.equal(messages[0].type, 'user');
-  view.unmount();
-});
-
-}
-
-test('a rejected or unconfirmed send retains the draft and shows the error', async () => {
-  steerSession.mockResolvedValue({ ok: false, json: async () => ({ error: { message: 'No active turn' } }) });
-  const { view, messages } = composer();
-  await act(async () => { view.result.current.setInput('do not lose this'); });
-  await act(async () => { await view.result.current.handleSteer(); });
-  assert.equal(view.result.current.input, 'do not lose this');
-  assert.equal(readDraftText('session-a'), 'do not lose this');
-  assert.equal(messages[0].type, 'error');
-  assert.equal(messages[0].content, 'No active turn');
-  view.unmount();
-});
-
-for (const switched of [false, true]) {
-  test(`a late acknowledgement preserves ${switched ? 'another session' : 'new typing'}`, async () => {
+  test(`${provider} queued arrow waits for acknowledgement and preserves new composer text`, async () => {
     let acknowledge!: (result: unknown) => void;
     steerSession.mockReturnValue(new Promise((resolve) => { acknowledge = resolve; }));
-    const { view, messages } = composer();
-    await act(async () => { view.result.current.setInput('original'); });
+    const { view, messages } = composer(provider);
+    await queue(view, 'change direction');
+    await act(async () => { view.result.current.setInput('next draft'); });
     let pending!: Promise<void>;
-    act(() => { pending = view.result.current.handleSteer(); });
+    act(() => { pending = sendQueued(view); });
+    await waitFor(() => assert.equal(steerSession.mock.calls.length, 1));
+    assert.equal(view.result.current.nativeQueuedMessages[0]?.content, 'change direction');
     await act(async () => {
-      if (switched) view.rerender({ session: { id: 'session-b' } });
-    });
-    await act(async () => { view.result.current.setInput('new draft'); });
-    await act(async () => {
+      await sendQueued(view);
       acknowledge({ ok: true, json: async () => ({ data: { delivered: true } }) });
       await pending;
     });
-    assert.equal(view.result.current.input, 'new draft');
-    assert.equal(readDraftText(switched ? 'session-b' : 'session-a'), 'new draft');
-    assert.equal(messages.filter((message) => message.type === 'user').length, switched ? 0 : 1);
+    assert.equal(steerSession.mock.calls.length, 1);
+    assert.deepEqual(steerSession.mock.calls[0], ['session-a', 'change direction', [], true]);
+    assert.equal(view.result.current.queuedDraft, null);
+    assert.equal(view.result.current.input, 'next draft');
+    assert.equal(readDraftText('session-a'), 'next draft');
+    assert.equal(messages.filter(message => message.type === 'user').length, 0, 'native consumption events own the user echo');
     view.unmount();
   });
 }
 
-test('Claude live input is available while background work remains', async () => {
-  steerSession.mockResolvedValue({ ok: true, json: async () => ({ data: { delivered: true } }) });
-  const { view } = composer('claude', true);
-  assert.equal(view.result.current.canSteer, true);
-  await act(async () => { view.result.current.setInput('keep the background job'); });
-  await act(async () => { await view.result.current.handleSteer(); });
-  assert.deepEqual(steerSession.mock.calls[0], ['session-a', 'keep the background job']);
+test('an unconfirmed queued send retains the card paused and shows the error', async () => {
+  steerSession.mockResolvedValue({ ok: false, json: async () => ({ error: { message: 'No active turn' } }) });
+  const { view, messages } = composer();
+  await queue(view, 'do not lose this');
+  await act(async () => { await sendQueued(view); });
+  assert.equal(view.result.current.nativeQueuedMessages[0]?.content, 'do not lose this');
+  assert.equal(view.result.current.input, 'do not lose this');
+  assert.equal(messages.at(-1)?.content, 'No active turn');
   view.unmount();
 });
 
-test('providers without live input cannot send through the steering handler', async () => {
+test('a late queued acknowledgement preserves another session and its draft', async () => {
+  let acknowledge!: (result: unknown) => void;
+  steerSession.mockReturnValue(new Promise((resolve) => { acknowledge = resolve; }));
+  const { view, messages } = composer();
+  await queue(view, 'original');
+  let pending!: Promise<void>;
+  act(() => { pending = sendQueued(view); });
+  await waitFor(() => assert.equal(steerSession.mock.calls.length, 1));
+  await act(async () => { view.rerender({ session: { id: 'session-b' } }); });
+  await act(async () => { view.result.current.setInput('new draft'); });
+  await act(async () => {
+    acknowledge({ ok: true, json: async () => ({ data: { delivered: true } }) });
+    await pending;
+  });
+  assert.equal(view.result.current.input, 'new draft');
+  assert.equal(readDraftText('session-b'), 'new draft');
+  assert.equal(readQueuedMessage('session-a'), null);
+  assert.equal(messages.filter((message) => message.type === 'user').length, 0);
+  view.unmount();
+});
+
+test('Claude can send a queued card while background work remains', async () => {
+  writeQueuedMessage('session-a', { content: 'keep the background job' });
+  steerSession.mockResolvedValue({ ok: true, json: async () => ({ data: { delivered: true } }) });
+  const { view } = composer('claude', true);
+  assert.equal(view.result.current.canSteer, true);
+  await act(async () => { await sendQueued(view); });
+  assert.deepEqual(steerSession.mock.calls[0], ['session-a', 'keep the background job', [], true]);
+  view.unmount();
+});
+
+test('providers without live input cannot send through the queued arrow', async () => {
   const { view } = composer('cursor');
   assert.equal(view.result.current.canSteer, false);
-  await act(async () => { view.result.current.setInput('retain'); });
-  await act(async () => { await view.result.current.handleSteer(); });
+  await queue(view, 'retain');
+  await act(async () => { await sendQueued(view); });
   assert.equal(steerSession.mock.calls.length, 0);
-  assert.equal(view.result.current.input, 'retain');
+  assert.equal(view.result.current.queuedDraft?.content, 'retain');
   view.unmount();
 });
 
@@ -163,7 +200,7 @@ for (const method of ['picker', 'drop'] as const) {
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
     Object.defineProperty(file, 'size', { value: 22 * 1024 * 1024 });
     const attachment = { name: file.name, path: '/assets/notes.txt', mimeType: file.type, size: file.size };
-    uploadFiles.mockResolvedValue({ ok: true, json: async () => ({ attachments: [attachment] }) });
+    uploadAttachment.mockResolvedValue(attachment);
     const picker = render(<PromptInput {...view.result.current.getRootProps()}>
       <input {...view.result.current.getInputProps()} data-testid="file-input" />
     </PromptInput>);
@@ -179,7 +216,7 @@ for (const method of ['picker', 'drop'] as const) {
     assert.equal(view.result.current.attachedFiles.length, 1);
     assert.equal(view.result.current.attachedFiles[0].name, 'notes.txt');
     await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
-    assert.equal(uploadFiles.mock.calls.length, 1);
+    assert.equal(uploadAttachment.mock.calls.length, 1);
     assert.equal(send.mock.calls.length, 1);
     assert.deepEqual((send.mock.calls as unknown as Array<[any]>)[0][0].options.attachments, [attachment]);
     assert.equal(view.result.current.attachedFiles.length, 0);
@@ -202,15 +239,72 @@ test('a failed upload preserves both attachment and input and enables retry', as
   const send = vi.fn(async () => {});
   const { view, messages } = composer('claude', false, send);
   const file = new File(['hello'], 'notes.txt');
+  uploadAttachment.mockRejectedValue(new Error('File upload timed out. Please retry.'));
   await act(async () => {
     view.result.current.setInput('read this');
     view.result.current.setAttachedFiles([file]);
   });
-  uploadFiles.mockRejectedValue(new Error('File upload timed out. Please retry.'));
+  uploadAttachment.mockRejectedValue(new Error('File upload timed out. Please retry.'));
   await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
   assert.equal(view.result.current.input, 'read this');
   assert.deepEqual(view.result.current.attachedFiles, [file]);
   assert.equal(view.result.current.isSending, false);
   assert.equal(send.mock.calls.length, 0);
-  assert.match(String(messages.at(-1)?.content), /timed out/);
+  assert.match(view.result.current.attachmentUploadStates.get(file)?.error ?? '', /timed out/);
+  assert.equal(messages.length, 0, 'upload failure stays on the attachment; nothing was submitted');
+});
+
+
+for (const rejected of [false, true]) {
+  test(`live attachment send ${rejected ? 'retains the file on failure' : 'uploads and waits for acknowledgement'}`, async () => {
+    const { view, messages } = composer('claude');
+    const file = new File(['doc'], 'report.docx');
+    const attachment = { name: file.name, path: '/assets/report.docx', size: file.size };
+    uploadAttachment.mockResolvedValue(attachment);
+    steerSession.mockResolvedValue({ ok: !rejected, json: async () => rejected ? { error: 'not received' } : { data: { delivered: true } } });
+    const picker = render(<PromptInput {...view.result.current.getRootProps()}><input {...view.result.current.getInputProps()} data-testid="live-file" /></PromptInput>);
+    await act(async () => fireEvent.change(picker.getByTestId('live-file'), { target: { files: [file] } }));
+    await queue(view, '');
+    await act(async () => { await sendQueued(view); });
+    assert.deepEqual(steerSession.mock.calls[0], ['session-a', '', [attachment], true]);
+    assert.equal(view.result.current.nativeQueuedMessages[0]?.attachments.length ?? 0, rejected ? 1 : 0);
+    assert.equal(uploadAttachment.mock.calls.length, 1);
+    if (rejected) assert.equal(messages[0].type, 'error');
+    else assert.equal(messages.length, 0);
+    picker.unmount(); view.unmount();
+  });
+}
+
+
+test('pending attachment blocks click, keyboard and queue admission until upload succeeds', async () => {
+  let finish!: (value: unknown) => void;
+  uploadAttachment.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const send = vi.fn(async () => {});
+  const { view, messages } = composer('claude', false, send);
+  const file = new File(['bytes'], 'pending.txt');
+  await act(async () => { view.result.current.setInput('read this'); view.result.current.setAttachedFiles([file]); });
+  act(() => { uploadAttachment.mock.calls[0][3](100); });
+  assert.equal(view.result.current.attachmentUploadStates.get(file)?.status, 'uploading', '100% transferred is not a server completion acknowledgement');
+  await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
+  assert.equal(send.mock.calls.length, 0);
+  assert.equal(messages.length, 0);
+  assert.equal(view.result.current.isSending, false);
+  assert.equal(view.result.current.input, 'read this');
+  assert.equal(view.result.current.queuedDraft, null);
+  await act(async () => { finish({ name: file.name, path: '/assets/pending.txt', mimeType: 'text/plain' }); });
+  await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
+  assert.equal(send.mock.calls.length, 1);
+  assert.equal(view.result.current.attachedFiles.length, 0);
+});
+
+test('an upload error remains unsent until explicit retry completes', async () => {
+  uploadAttachment.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({name:'retry.txt',path:'/assets/retry.txt'});
+  const send=vi.fn(async()=>{}); const {view}=composer('claude',false,send);
+  const file=new File(['data'],'retry.txt');
+  await act(async()=>{view.result.current.setAttachedFiles([file]);});
+  await act(async()=>{await view.result.current.handleSubmit({preventDefault(){}} as never);});
+  assert.equal(send.mock.calls.length,0);assert.equal(uploadAttachment.mock.calls.length,1);
+  await act(async()=>{view.result.current.retryAttachmentUpload(file);});
+  await act(async()=>{await view.result.current.handleSubmit({preventDefault(){}} as never);});
+  assert.equal(send.mock.calls.length,1);assert.equal(uploadAttachment.mock.calls.length,2);
 });

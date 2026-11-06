@@ -75,32 +75,16 @@ afterEach(() => {
   localStorage.clear();
 });
 
-test('sending on a session with background work asks first, naming the session\'s own tasks', async () => {
+
+test('Claude follow-ups reuse background work without asking to destroy it', async () => {
   confirm.mockReturnValue(false);
-  const { sends, view } = await submit(backgroundOnly);
-
-  assert.equal(confirm.mock.calls.length, 1);
-  assert.equal(
-    confirm.mock.calls[0]?.[0],
-    'This session still has background work running:\n'
-    + '• Workflow frontend-architecture-audit\n'
-    + '• Agent Survey the repo\n\n'
-    + 'A new message starts a new turn, which stops that work; anything it has not reported yet is lost. Send anyway?',
-  );
-  assert.equal(sends.length, 0, 'declined: nothing is sent');
-  assert.equal(view.result.current.input, 'hello', 'and the draft stays in the composer');
-});
-
-test('confirming sends the message', async () => {
-  confirm.mockReturnValue(true);
   const { sends } = await submit(backgroundOnly);
-
+  assert.equal(confirm.mock.calls.length, 0);
   assert.equal(sends.length, 1);
 });
 
 test('a session with nothing in the background sends without asking', async () => {
   const { sends } = await submit(new Map());
-
   assert.equal(confirm.mock.calls.length, 0);
   assert.equal(sends.length, 1);
 });

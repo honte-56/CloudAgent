@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { projectsDb, sessionsDb, chatEventsDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
+import { sessionExecutionService } from '@/modules/providers/services/session-execution.service.js';
 import type {
   BackgroundTaskSummary,
   FetchHistoryOptions,
@@ -22,15 +23,14 @@ import { AppError, sliceTailPage } from '@/shared/utils.js';
  *
  * A chat run in progress is listed as before. A session whose turn has ended
  * but whose background tasks are still outstanding is listed with
- * `background: true` and `canInterrupt: false`: the composer stays usable
- * (the runtime accepts a new turn while the work runs) and there is no run to
- * abort — a task is stopped by id through `chat.stop-task` instead. `tasks`
+ * `background: true` and `canInterrupt: true`: the composer stays usable
+ * (the runtime appends a follow-up without replacing its process). Stop can
+ * close the owned process, or stop one task by id through `chat.stop-task`. `tasks`
  * rides along on both kinds whenever the session has any.
  *
- * A turn driven outside CloudCLI — the Claude CLI in the Shell view, or a
- * terminal the user opened themselves — is listed the same way, with
- * `canInterrupt: false` because there is no run here to abort, and a
- * `statusText` saying where the work is happening.
+ * A CloudCLI terminal shares ownership and can be stopped or handed off.
+ * An external CLI is visible but has `canInterrupt: false`, since this server
+ * does not own that process. `statusText` identifies where work is happening.
  */
 type RunningSessionEntry = {
   sessionId: string;
@@ -38,7 +38,7 @@ type RunningSessionEntry = {
   startedAt: number;
   lastSeq: number;
   background?: true;
-  canInterrupt?: false;
+  canInterrupt?: boolean;
   statusText?: string;
   tasks?: BackgroundTaskSummary[];
 };
@@ -179,9 +179,10 @@ export const sessionsService = {
           // that subscribes with its lastSeq replays the tail it missed.
           lastSeq: chatRunRegistry.getRun(sessionId)?.lastSeq ?? 0,
           background: true,
-          canInterrupt: false,
+          canInterrupt: true,
           tasks,
         });
+        runningById.set(sessionId, entries[entries.length - 1]);
       }
     }
 
@@ -200,9 +201,9 @@ export const sessionsService = {
         provider: session.provider as LLMProvider,
         startedAt: live.startedAt,
         lastSeq: chatRunRegistry.getRun(session.session_id)?.lastSeq ?? 0,
-        // There is no run here to abort: the turn belongs to a CLI process
-        // CloudCLI does not own, so it can be reported but not interrupted.
-        canInterrupt: false,
+        // Managed terminals share stop/takeover with chat. External CLI
+        // processes remain report-only because CloudCLI does not own them.
+        canInterrupt: sessionExecutionService.get(session.session_id)?.kind === 'terminal',
         statusText: 'Running in the Claude CLI',
       });
       runningById.set(session.session_id, entries[entries.length - 1]);
@@ -346,6 +347,25 @@ export const sessionsService = {
       });
     }
 
+    const history = await sessionsService.fetchHistory(sessionId, { limit: null });
+    const forkPoints = history.messages.filter(message => message.forkAnchorId);
+    let forkAnchorId = options.upToAnchorId;
+    if (forkAnchorId) {
+      const selected = history.messages.find(message => message.forkAnchorId === forkAnchorId || message.transcriptAnchorId === forkAnchorId);
+      if (!selected?.forkAnchorId) {
+        throw new AppError('该位置尚未形成完整回复，请等待本轮结束后再创建分支。', { code: 'FORK_POINT_NOT_READY', statusCode: 409 });
+      }
+      forkAnchorId = selected.forkAnchorId;
+    } else if (forkPoints.length) {
+      forkAnchorId = forkPoints.at(-1)!.forkAnchorId;
+    } else {
+      throw new AppError('还没有可用于分支的完整回复，请等待回复完成后重试。', { code: 'FORK_POINT_NOT_READY', statusCode: 409 });
+    }
+    const latest = sessionsDb.getSessionById(sessionId);
+    if (latest?.provider_session_id !== source.provider_session_id || latest?.jsonl_path !== source.jsonl_path) {
+      throw new AppError('原会话在创建分支期间发生了变化，请重试。', { code: 'FORK_SOURCE_CHANGED', statusCode: 409 });
+    }
+
     const sessionName = options.title?.trim()
       || `${source.custom_name?.trim() || 'Session'} (fork)`;
 
@@ -353,7 +373,7 @@ export const sessionsService = {
       providerSessionId: source.provider_session_id,
       jsonlPath: source.jsonl_path,
       projectPath: source.project_path ?? '',
-      upToAnchorId: options.upToAnchorId,
+      upToAnchorId: forkAnchorId,
       title: sessionName,
     });
 
@@ -483,7 +503,7 @@ export const sessionsService = {
 
   async fetchHistory(
     sessionId: string,
-    options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
+    options: Pick<FetchHistoryOptions, 'limit' | 'offset' | 'before'> = {},
   ): Promise<FetchHistoryResult> {
     const session = sessionsDb.getSessionById(sessionId);
     if (!session) {
@@ -520,7 +540,7 @@ export const sessionsService = {
     const transcriptPath = provider === 'claude' || provider === 'codex'
       ? session.jsonl_path
       : null;
-    const fullHistory = await sessionHistoryCache.getFullHistory({
+    let fullHistory = await sessionHistoryCache.getFullHistory({
       sessionId,
       transcriptPath,
       loadFull: () => providerSessions.fetchHistory(sessionId, {
@@ -531,11 +551,18 @@ export const sessionsService = {
       }),
     });
 
+    if (options.before && !fullHistory) fullHistory = await providerSessions.fetchHistory(sessionId, { limit: null, offset: 0, projectPath, providerSessionId });
+    let pageOffset = requestedOffset;
+    if (options.before && fullHistory) {
+      const index = fullHistory.messages.findIndex(row => (row.messageKey || row.id) === options.before);
+      if (index < 0) throw new AppError('History changed; reload the latest messages.', { code: 'HISTORY_CURSOR_EXPIRED', statusCode: 409 });
+      pageOffset = fullHistory.messages.length - index;
+    }
     let result: FetchHistoryResult;
     if (fullHistory) {
       // Providers slice with this same helper, so a cached page is identical
       // to what a direct `(limit, offset)` read would have returned.
-      const { page, hasMore } = sliceTailPage(fullHistory.messages, requestedLimit, Math.max(0, requestedOffset));
+      const { page, hasMore } = sliceTailPage(fullHistory.messages, requestedLimit, Math.max(0, pageOffset));
       result = {
         ...fullHistory,
         messages: page,
@@ -554,6 +581,9 @@ export const sessionsService = {
 
     return {
       ...result,
+      oldestCursor: result.messages[0]?.messageKey || result.messages[0]?.id,
+      realtimeCursor: chatEventsDb.cursor(sessionId),
+      timelineRevision: chatEventsDb.revision(sessionId),
       messages: result.messages.map((message) => ({
         ...message,
         sessionId,

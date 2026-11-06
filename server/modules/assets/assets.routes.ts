@@ -9,9 +9,10 @@ import {
   openStoredAttachmentAsset,
 } from '@/modules/assets/services/image-assets.service.js';
 
-import { storeAttachmentChunk } from '@/modules/assets/services/chunk-upload.service.js';
+import { storeAttachmentChunk, cancelAttachmentUpload, startAttachmentExpiry } from '@/modules/assets/services/chunk-upload.service.js';
 
 const router = express.Router();
+startAttachmentExpiry();
 
 // Multer writes uploads straight into the global assets folder; the service
 // owns the folder location and the response record shape.
@@ -92,8 +93,14 @@ router.post('/files', (req, res) => {
   });
 });
 
-// Each request stays below reverse proxy body limits; memory is bounded to 8MB.
-const chunkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 5, fieldSize: 1024 } }).single('chunk');
+// The service enforces an inclusive 8 MiB payload limit. Multer signals its
+// limit at equality, so allow one extra byte here and let the service validate it.
+const chunkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 + 1, files: 1, fields: 6, fieldSize: 1024 } }).single('chunk');
+router.delete('/files/uploads/:uploadId', async (req, res) => {
+  const userId = Number((req as express.Request & { user?: { id?: number | string } }).user?.id);
+  try { res.json({ deleted: await cancelAttachmentUpload(userId, String(req.params.uploadId)) }); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Upload cancellation failed' }); }
+});
 router.post('/files/chunks', (req, res) => {
   chunkUpload(req, res, async (error: unknown) => {
     const userId = Number((req as express.Request & { user?: { id?: number | string } }).user?.id);
@@ -110,7 +117,7 @@ router.post('/files/chunks', (req, res) => {
       const result = await storeAttachmentChunk({
         userId, uploadId: req.body.uploadId, index: Number(req.body.index),
         totalSize: Number(req.body.totalSize), name: req.body.name,
-        mimeType: req.body.mimeType, bytes: req.file.buffer,
+        mimeType: req.body.mimeType, bytes: req.file.buffer, managed: req.body.managed === 'true',
       });
       res.json(result);
     } catch (caught) {

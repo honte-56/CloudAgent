@@ -16,7 +16,6 @@ import LazyMessageRow from '@/modules/chat/transcript/LazyMessageRow';
 import MessageComponent from '@/modules/chat/transcript/MessageComponent';
 import ProviderSelectionEmptyState from '@/modules/chat/transcript/ProviderSelectionEmptyState';
 import ToolGroupContainer from '@/modules/chat/transcript/ToolGroupContainer';
-import LoadAllMessagesOverlay from '@/modules/chat/transcript/LoadAllMessagesOverlay';
 import ChatExportMenu from '@/modules/chat/transcript/ChatExportMenu';
 import { BackgroundTasksStrip } from '@/modules/chat/transcript/BackgroundTasksStrip';
 
@@ -55,12 +54,13 @@ type ChatMessagesPaneProps = {
   hasMoreMessages: boolean;
   totalMessages: number;
   sessionMessagesCount: number;
-  visibleMessageCount: number;
   visibleMessages: ChatMessage[];
   loadEarlierMessages: () => void;
+  historyStartRef?: RefObject<HTMLDivElement>;
   revealMessage: (message: ChatMessage) => void;
   /** The session's running background tasks from the activity map, for the strip to list ones whose rows are not loaded. */
   backgroundTasks?: BackgroundTaskSummary[];
+  onOpenTask?: (toolUseId: string, title: string) => void;
   /** The chat websocket's send, which the background-tasks strip stops a task over. */
   sendMessage: (message: unknown) => void;
   loadAllMessages: () => void;
@@ -78,7 +78,7 @@ type ChatMessagesPaneProps = {
   /** Loads an already-sent message back into the composer; absent when the provider cannot re-run from a point. */
   onEditMessage?: (message: ChatMessage) => void;
   /** Branches the conversation into a new session ending at a message. */
-  onForkFromMessage?: (message: ChatMessage) => void;
+  onForkFromMessage?: (message: ChatMessage) => void | Promise<void>;
   /** Fetches the whole transcript for an export, which otherwise only sees the loaded page. */
   onLoadFullTranscript?: () => Promise<ChatMessage[]>;
 };
@@ -122,19 +122,17 @@ function ChatMessagesPane({
   setInput,
   isLoadingMoreMessages,
   hasMoreMessages,
-  totalMessages,
   sessionMessagesCount,
-  visibleMessageCount,
   visibleMessages,
   loadEarlierMessages,
+  historyStartRef,
   revealMessage,
   backgroundTasks,
+  onOpenTask,
   sendMessage,
   loadAllMessages,
   allMessagesLoaded,
   isLoadingAllMessages,
-  loadAllJustFinished,
-  showLoadAllOverlay,
   createDiff,
   onEditMessage,
   onForkFromMessage,
@@ -201,6 +199,7 @@ function ChatMessagesPane({
             <BackgroundTasksStrip
               messages={chatMessages}
               tasks={backgroundTasks}
+              onOpenTask={onOpenTask}
               sessionId={selectedSession?.id || currentSessionId}
               sendMessage={sendMessage}
               onReveal={revealMessage}
@@ -219,7 +218,8 @@ function ChatMessagesPane({
           </div>
         </div>
       )}
-      <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
+      <div data-transcript-content className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
+      <div ref={historyStartRef} aria-hidden="true" className="h-px" />
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
           <div className="flex items-center justify-center space-x-2">
@@ -259,39 +259,15 @@ function ChatMessagesPane({
           {/* Indicator showing there are more messages to load (hide when all loaded) */}
           {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && (
             <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              {totalMessages > 0 && (
-                <span>
-                  {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
-                  <span className="text-xs">{t('session.messages.scrollToLoad')}</span>
-                </span>
-              )}
-            </div>
-          )}
-
-          <LoadAllMessagesOverlay
-            showLoadAllOverlay={showLoadAllOverlay}
-            isLoadingAllMessages={isLoadingAllMessages}
-            loadAllJustFinished={loadAllJustFinished}
-            totalMessages={totalMessages}
-            onLoadAllMessages={loadAllMessages}
-          />
-
-          {/* Legacy message count indicator (for non-paginated view) */}
-          {!hasMoreMessages && chatMessages.length > visibleMessageCount && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              {t('session.messages.showingLast', { count: visibleMessageCount, total: chatMessages.length })} |
-              <button className="ml-1 text-blue-600 underline hover:text-blue-700" onClick={loadEarlierMessages}>
+              <span>{t('session.messages.loaded', { count: sessionMessagesCount })}{' '}</span>
+              <button className="ml-1 text-blue-600 underline hover:text-blue-700 dark:text-blue-400" onClick={loadEarlierMessages}>
                 {t('session.messages.loadEarlier')}
               </button>
-              {' | '}
-              <button
-                className="text-blue-600 underline hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-                onClick={loadAllMessages}
-              >
-                {t('session.messages.loadAll')}
-              </button>
+
             </div>
           )}
+
+
 
           {(() => {
             let prevMessage: ChatMessage | null = null;

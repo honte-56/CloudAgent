@@ -28,3 +28,5 @@ export { scheduledMessagesDb } from './repositories/scheduled-messages.db.js';
 export type { ScheduledMessageRow, ScheduledMessageStatus } from './repositories/scheduled-messages.db.js';
 
 export { projectGithubCredentialsDb } from '@/modules/database/repositories/project-github-credentials.db.js';
+
+export { chatEventsDb } from '@/modules/database/repositories/chat-events.db.js';

@@ -19,6 +19,8 @@ import type { QueuedSendOptions } from '@/shared/types';
 /** A queued message as it is stored: text plus the send options it was composed under. */
 export type StoredQueuedMessage = {
   content: string;
+  /** Delivery paused after failure; editing explicitly enables a retry. */
+  deliveryError?: string;
   options?: QueuedSendOptions;
   /** Legacy image-only descriptors retained for queued draft compatibility. */
   images?: unknown[];
@@ -52,6 +54,9 @@ const listeners = new Set<() => void>();
 
 let drafts = new Map<string, DraftRecord>();
 const pendingScopes = new Set<string>();
+// Serialize saves and hold edits while a queued message is claimed for live input.
+const serverWrites = new Map<string, Promise<void>>();
+const deliveringScopes = new Set<string>();
 let serverWriteTimer: ReturnType<typeof setTimeout> | null = null;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
@@ -112,32 +117,22 @@ function notifyListeners(): void {
 
 function flushServerWrites(): void {
   serverWriteTimer = null;
-  const scopes = [...pendingScopes];
-  pendingScopes.clear();
-
+  const scopes = [...pendingScopes].filter(scope => !deliveringScopes.has(scope));
   for (const scope of scopes) {
+    pendingScopes.delete(scope);
     const draft = drafts.get(scope);
-
-    // A save that fails must never surface as an unhandled rejection out of a
-    // timer callback: the mirror already holds the draft, and the next
-    // keystroke re-sends it.
-    try {
-      if (!draft || isEmptyDraft(draft)) {
-        void api.user.deleteDraft(scope).catch((error: unknown) => {
-          console.error('Failed to delete chat draft:', error);
-        });
-        continue;
-      }
-
-      void api.user.saveDraft(scope, {
-        text: draft.text,
-        queuedMessage: draft.queuedMessage,
-      }).catch((error: unknown) => {
-        console.error('Failed to save chat draft:', error);
-      });
-    } catch (error) {
-      console.error('Failed to save chat draft:', error);
-    }
+    const previous = serverWrites.get(scope);
+    const save = async () => {
+      const response = !draft || isEmptyDraft(draft)
+        ? await api.user.deleteDraft(scope)
+        : await api.user.saveDraft(scope, { text: draft.text, queuedMessage: draft.queuedMessage });
+      if (!response.ok) throw new Error('Failed to save chat draft.');
+    };
+    const write = previous ? previous.catch(() => {}).then(save) : save();
+    serverWrites.set(scope, write);
+    void write.catch((error: unknown) => console.error('Failed to save chat draft:', error)).finally(() => {
+      if (serverWrites.get(scope) === write) serverWrites.delete(scope);
+    });
   }
 }
 
@@ -218,6 +213,55 @@ export function clearQueuedMessage(scope: string): void {
   flushServerWritesNow();
 }
 
+/** Used by the queued card: claim and deliver its saved content without touching new typing. */
+export async function steerQueuedMessage(scope: string): Promise<void> {
+  if (deliveringScopes.has(scope)) return;
+  const queued = readQueuedMessage(scope);
+  if (!queued) throw new Error('Queued message was already sent or removed.');
+  flushServerWritesNow();
+  deliveringScopes.add(scope);
+  try {
+    // Several serialized saves may precede this click. Bound the entire wait,
+    // and never continue to inject the message after that wait has expired.
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([serverWrites.get(scope), new Promise<never>((_resolve, reject) => {
+        saveTimer = setTimeout(() => reject(new Error('等待排队消息保存确认超时，请检查连接和会话记录。')), 10_000);
+      })]);
+    } finally {
+      clearTimeout(saveTimer);
+    }
+    const response = await api.providers.steerSession(scope, queued.content, queued.attachments ?? [], true);
+    const body = await response.json();
+    if (!response.ok || body?.data?.delivered !== true) {
+      const message = body?.error?.message || body?.error || 'Live input could not be confirmed.';
+      if (body?.error?.code === 'QUEUE_CHANGED') {
+        // Another dispatcher/device owns this message. Do not put it back.
+        const snapshot = await api.user.drafts();
+        if (!snapshot.ok) throw new Error(message);
+        const payload = await snapshot.json();
+        const remote = payload.drafts?.find((draft: { scope: string }) => draft.scope === scope);
+        updateDraft(scope, { queuedMessage: remote?.queuedMessage ?? null });
+      } else {
+        updateDraft(scope, { queuedMessage: { ...queued, deliveryError: String(message) } });
+      }
+      throw new Error(message);
+    }
+    updateDraft(scope, { queuedMessage: null });
+  } catch (error) {
+    // A lost receipt can mean delivery succeeded. Pause instead of auto-resending.
+    if (readQueuedMessage(scope) === null) throw error;
+    const current = readQueuedMessage(scope);
+    if (current && !current.deliveryError && current.content === queued.content) {
+      updateDraft(scope, { queuedMessage: { ...current, deliveryError: error instanceof Error ? error.message : String(error) } });
+    }
+    throw error;
+  } finally {
+    deliveringScopes.delete(scope);
+    flushServerWritesNow();
+  }
+}
+
 /** Subscribes to any draft change; returns the unsubscribe function. */
 export function subscribeToChatDrafts(listener: () => void): () => void {
   listeners.add(listener);
@@ -235,6 +279,7 @@ export function subscribeToChatDrafts(listener: () => void): () => void {
  */
 export async function hydrateChatDrafts(): Promise<void> {
   let serverDrafts: Array<{ scope?: unknown; text?: unknown; queuedMessage?: unknown }> = [];
+  const protectedScopes = new Set([...pendingScopes, ...deliveringScopes, ...serverWrites.keys()]);
 
   try {
     const response = await api.user.drafts();
@@ -253,10 +298,11 @@ export async function hydrateChatDrafts(): Promise<void> {
     return;
   }
 
+  for (const scope of [...pendingScopes, ...deliveringScopes, ...serverWrites.keys()]) protectedScopes.add(scope);
   const merged = new Map<string, DraftRecord>();
   for (const draft of serverDrafts) {
     const scope = typeof draft.scope === 'string' ? draft.scope : '';
-    if (!scope || pendingScopes.has(scope)) {
+    if (!scope || protectedScopes.has(scope)) {
       continue;
     }
 
@@ -271,7 +317,7 @@ export async function hydrateChatDrafts(): Promise<void> {
   // Local edits whose debounced write has not left the browser yet win over
   // the server snapshot. Every other missing scope was deleted remotely and
   // must also disappear from the mirror.
-  for (const scope of pendingScopes) {
+  for (const scope of protectedScopes) {
     const pending = drafts.get(scope);
     if (pending) {
       merged.set(scope, pending);
@@ -287,6 +333,8 @@ export async function hydrateChatDrafts(): Promise<void> {
 export function resetChatDrafts(): void {
   drafts = new Map();
   pendingScopes.clear();
+  serverWrites.clear();
+  deliveringScopes.clear();
   if (serverWriteTimer !== null) {
     clearTimeout(serverWriteTimer);
     serverWriteTimer = null;

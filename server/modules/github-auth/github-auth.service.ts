@@ -19,12 +19,18 @@ export function getProjectGithubCredential(userId: number, projectId: string) {
   return { configured: Boolean(binding), credentialId: binding?.credential_id ?? null, name: binding?.credential_name ?? null, isActive: Boolean(binding?.is_active) };
 }
 
-/** Used by Projects settings and clone completion to select an active credential belonging to the authenticated user. */
-export function setProjectGithubCredential(userId: number, projectId: string, credentialId: number | null): void {
-  requireProject(projectId);
+/** Used by Projects before filesystem changes and again when persisting a binding. */
+export function validateProjectGithubCredential(userId: number, credentialId: number | null): void {
+  if (!Number.isSafeInteger(userId) || userId <= 0) throw new AppError('Authentication required', { code: 'UNAUTHORIZED', statusCode: 401 });
   if (credentialId !== null && !githubTokensDb.getGithubTokenById(userId, credentialId)) {
     throw new AppError('GitHub credential is unavailable. Select an active token in Settings.', { code: 'PROJECT_GITHUB_CREDENTIAL_UNAVAILABLE', statusCode: 409 });
   }
+}
+
+/** Used by Projects settings and clone completion to select an active credential belonging to the authenticated user. */
+export function setProjectGithubCredential(userId: number, projectId: string, credentialId: number | null): void {
+  requireProject(projectId);
+  validateProjectGithubCredential(userId, credentialId);
   projectGithubCredentialsDb.set(userId, projectId, credentialId);
 }
 
@@ -82,6 +88,6 @@ export async function resolveProjectGithubAuthentication(userId: number, project
   environment.GIT_CONFIG_COUNT = String(start + entries.length);
   return {
     environment,
-    instructions: 'This project has GitHub authentication configured for git over HTTPS and gh. Use git and gh directly; do not log in, read, print, or copy credentials. GitHub SSH remotes are mapped to HTTPS for this run. Commit and push only as requested by the user. Git author identity comes from the existing Git configuration.',
+    instructions: 'GitHub auth is preconfigured for git and gh. Do not reauthenticate or access/expose credentials. Keep the existing Git author identity; commit or push only when requested. If auth fails, report it without switching accounts.',
   };
 }

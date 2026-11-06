@@ -22,6 +22,8 @@ type CreateFolderResponse = {
 type CreateProjectPayload = {
   path: string;
   customName?: string;
+  githubTokenId?: number | null;
+  newGithubToken?: string | null;
 };
 
 type CreateProjectApiError = {

@@ -2,6 +2,7 @@ export { sessionSynchronizerService } from './services/session-synchronizer.serv
 export { providerSkillsService } from './services/skills.service.js';
 export { providerMcpService } from './services/mcp.service.js';
 export { providerRuntimeService } from './services/provider-runtime.service.js';
+export { sessionExecutionService } from './services/session-execution.service.js';
 
 // providerModelsService: used by Commands to list models and resolve the active session model.
 export { providerModelsService } from './services/provider-models.service.js';
@@ -10,5 +11,12 @@ export { providerModelsService } from './services/provider-models.service.js';
 // edited message's resume point, which only the providers module can read.
 export { sessionsService } from './services/sessions.service.js';
 
+// reapOrphanedOpenCodeServers: used by the server entrypoint at startup to stop
+// OpenCode turn servers a killed CloudCLI process left running.
+export { reapOrphanedOpenCodeServers } from './list/opencode/opencode-runtime.provider.js';
+
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';
+
+// Server startup restores statusline preferences from the retired capture integration.
+export { removeClaudeStatuslineCapture } from './services/claude-statusline-cleanup.service.js';

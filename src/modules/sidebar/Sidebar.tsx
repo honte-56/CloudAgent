@@ -1,4 +1,6 @@
-import { memo, useCallback, useEffect } from 'react';
+import ReactDOM from 'react-dom';
+import ProjectSettingsModal from '@/modules/sidebar/ProjectSettingsModal';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '@/shared/hooks/useDeviceSettings';
@@ -74,6 +76,8 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
+  // Keep project settings independent of the selected chat.
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   // Only membership is rendered here, so subscribing to the full activity map
   // would re-render the whole tree on every provider status frame.
   const activeSessions = useBusySessionIdSet();
@@ -118,7 +122,6 @@ function Sidebar({
     getProjectSessions,
     loadingMoreProjects,
     loadMoreSessionsForProject,
-    startEditingProject,
     startEditingSession,
     updateRenameDraft,
     cancelRename,
@@ -164,6 +167,7 @@ function Sidebar({
     setCurrentProject,
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
     sidebarVisible,
+    keepProjectsExpanded: preferences.keepProjectsExpanded,
   });
 
   useEffect(() => {
@@ -216,7 +220,7 @@ function Sidebar({
     onToggleProject: toggleProject,
     onProjectSelect: handleProjectSelect,
     onToggleStarProject: toggleStarProject,
-    onStartEditingProject: startEditingProject,
+    onStartEditingProject: setEditingProject,
     onCancelEditingProject: cancelRename,
     onSaveProjectName: handleSaveProjectName,
     onDeleteProject: requestProjectDelete,
@@ -238,6 +242,9 @@ function Sidebar({
 
   return (
     <>
+      {editingProject && ReactDOM.createPortal(<ProjectSettingsModal key={editingProject.projectId} project={editingProject} onClose={() => setEditingProject(null)} onSaved={() => {
+        void paletteOps.refreshProjects();
+      }} />, document.body)}
         <SidebarModals
           projects={projects}
         showSettings={showSettings}

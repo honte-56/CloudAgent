@@ -110,7 +110,7 @@ router.post(
       });
     }
 
-    if (requestBody.githubUrl || requestBody.githubTokenId || requestBody.newGithubToken) {
+    if (requestBody.githubUrl) {
       throw new AppError('Repository cloning is not supported on create-project', {
         code: 'CLONE_NOT_SUPPORTED_ON_CREATE_PROJECT',
         statusCode: 400,
@@ -118,9 +118,25 @@ router.post(
       });
     }
 
+    const credentialId = requestBody.githubTokenId ?? null;
+    const inlineToken = requestBody.newGithubToken ?? null;
+    if (credentialId !== null && (typeof credentialId !== 'number' || !Number.isSafeInteger(credentialId) || credentialId <= 0)) {
+      throw new AppError('githubTokenId must be a positive integer or null', { code: 'INVALID_CREDENTIAL_ID', statusCode: 400 });
+    }
+    if (inlineToken !== null && typeof inlineToken !== 'string') {
+      throw new AppError('newGithubToken must be a string or null', { code: 'INVALID_CREDENTIAL', statusCode: 400 });
+    }
+    if (credentialId !== null && inlineToken?.trim()) {
+      throw new AppError('Select one GitHub credential', { code: 'INVALID_CREDENTIAL', statusCode: 400 });
+    }
     const projectCreationResult = await createProject({
       projectPath,
       customName,
+      github: credentialId !== null || inlineToken?.trim() ? {
+        userId: Number((req as express.Request & { user?: { id: number | string } }).user?.id),
+        credentialId,
+        inlineToken: inlineToken?.trim() || null,
+      } : undefined,
     });
 
     res.json({

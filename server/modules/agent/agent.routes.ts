@@ -7,6 +7,9 @@ import type { ProviderRunFunction } from '@/shared/types.js';
 
 import { normalizeProjectPath } from '../../shared/utils.js';
 
+/** The providers an Agent API run can start: the ones with a runtime and a model catalog. */
+const AGENT_RUN_PROVIDERS = ['claude', 'cursor', 'codex', 'opencode'];
+
 /** What the route reads off a session row it continues: the row, not the request, says which provider and project a session belongs to. */
 type AgentSessionRow = {
   session_id: string;
@@ -646,17 +649,21 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
    *                             Omitted: a new session is created for the run.
    *
    * @param {string} model - (Optional) Model identifier for providers.
+   *                        Omitted: the provider's catalog DEFAULT from GET /api/providers/:provider/models,
+   *                        which is the first custom model while "Use only my models" is on. Cursor
+   *                        without that setting leaves the choice to its CLI.
    *
    *                        Claude models: 'default', 'sonnet', 'opus', 'haiku', 'sonnet[1m]', 'opus[1m]', 'fable'
    *                        Cursor models: 'gpt-5' (default), 'gpt-5.2', 'gpt-5.2-high', 'sonnet-4.5', 'opus-4.5',
    *                                       'composer-1', 'auto', 'gpt-5.1', 'gpt-5.1-high',
    *                                       'gpt-5.1-codex', 'gpt-5.1-codex-high', 'gpt-5.1-codex-max',
    *                                       'gpt-5.1-codex-max-high', 'opus-4.1', 'grok', and thinking variants
-   *                        Codex models: 'gpt-5.4' (default), 'gpt-5.5', 'gpt-5.4-mini'
+   *                        Codex models: 'gpt-5.6-sol' (default), 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra',
+   *                                      'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'
    *
    * @param {string} effort - (Optional) Reasoning effort for providers/models that support it.
    *                          Claude supports: 'low', 'medium', 'high', 'xhigh', 'max' depending on model.
-   *                          Codex supports: 'low', 'medium', 'high', 'xhigh'.
+   *                          Codex supports: 'low', 'medium', 'high', 'xhigh', 'max', 'ultra' depending on model.
    *                          'default' or omission lets the provider decide.
    *
    * @param {boolean} cleanup - (Optional) Auto-cleanup project directory after completion.
@@ -890,7 +897,7 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
       return res.status(400).json({ error: 'message is required' });
     }
 
-    if (requestedProvider !== null && !['claude', 'cursor', 'codex', 'opencode'].includes(requestedProvider)) {
+    if (requestedProvider !== null && !AGENT_RUN_PROVIDERS.includes(requestedProvider)) {
       return res.status(400).json({ error: 'provider must be "claude", "cursor", "codex", or "opencode"' });
     }
 
@@ -1029,8 +1036,20 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
       });
       writer.send({ type: 'session-id', sessionId: appSessionId });
 
-      const codexModels = await providerModelsService.getProviderModels('codex');
-      const opencodeModels = await providerModelsService.getProviderModels('opencode');
+      // A request without `model` runs on the catalog's DEFAULT, the value
+      // /api/providers/:provider/models and the API docs advertise. It is the
+      // first custom model while the provider lists only custom models.
+      // Only the four runnable providers have a catalog: a continued legacy
+      // session whose provider is no longer registered must not fail here.
+      const providerModels = AGENT_RUN_PROVIDERS.includes(provider)
+        ? await providerModelsService.getProviderModels(provider)
+        : null;
+      // Cursor otherwise leaves the choice to its CLI, so it only takes the
+      // catalog DEFAULT when that is one of the user's own models.
+      const cursorDefaultModel = providerModels?.CUSTOM_MODELS_ONLY === true
+        && providerModels.OPTIONS.some((option) => option.isCustom)
+        ? providerModels.DEFAULT
+        : undefined;
 
       // Start the appropriate session
       if (provider === 'claude') {
@@ -1040,9 +1059,10 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
           projectPath: finalProjectPath,
           cwd: finalProjectPath,
           sessionId: appSessionId,
-          model: model,
+          model: model || providerModels?.DEFAULT,
           effort,
-          permissionMode: 'bypassPermissions' // Bypass all permissions for API calls
+          permissionMode: 'bypassPermissions', // Bypass all permissions for API calls
+          unattended: true // No person is there to answer an MCP server's request for input
         }, run.writer);
 
       } else if (provider === 'cursor') {
@@ -1052,7 +1072,7 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
           projectPath: finalProjectPath,
           cwd: finalProjectPath,
           sessionId: appSessionId,
-          model: model || undefined,
+          model: model || cursorDefaultModel,
           skipPermissions: true // Bypass permissions for Cursor
         }, run.writer);
       } else if (provider === 'codex') {
@@ -1062,7 +1082,7 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
           projectPath: finalProjectPath,
           cwd: finalProjectPath,
           sessionId: appSessionId,
-          model: model || codexModels.DEFAULT,
+          model: model || providerModels?.DEFAULT,
           effort,
           permissionMode: 'bypassPermissions'
         }, run.writer);
@@ -1073,7 +1093,7 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
           projectPath: finalProjectPath,
           cwd: finalProjectPath,
           sessionId: appSessionId,
-          model: model || opencodeModels.DEFAULT,
+          model: model || providerModels?.DEFAULT,
           effort,
           permissionMode: 'bypassPermissions' // Agent runs are non-interactive, like the other providers above
         }, run.writer);
@@ -1082,7 +1102,7 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
       // A tab can now abort the run (`chat.abort`), on which the runtime
       // returns as it does on completion. What the interrupted agent left
       // behind is not a result to branch or open a PR from.
-      const aborted = run.events.some((event) => event.kind === 'complete' && event.aborted === true);
+      const aborted = run.aborted === true;
       if (aborted) {
         writer.send({ type: 'status', message: 'Run aborted', aborted: true });
       }

@@ -12,8 +12,10 @@ import cors from 'cors';
 import { AppError, findApplicationRoot, getModuleDirectory, IS_PLATFORM, terminalTextStyles } from '@/shared/utils.js';
 import {
     closeSessionsWatcher,
+    removeClaudeStatuslineCapture,
     initializeSessionsWatcher,
     providerRuntimeService,
+    reapOrphanedOpenCodeServers,
 } from '@/modules/providers/index.js';
 import { chatRunRegistry, createWebSocketServer } from '@/modules/websocket/index.js';
 
@@ -112,6 +114,7 @@ createWebSocketServer(server, {
         runtime: providerRuntimeService,
     },
     shell: {
+        resolveSessionProjectPath: sessionId => sessionsDb.getSessionById(sessionId)?.project_path,
         resolveProviderSessionId: (sessionId, provider) => {
             const dbSession = sessionsDb.getSessionById(sessionId);
             if (dbSession) {
@@ -334,6 +337,10 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
 
+        await removeClaudeStatuslineCapture().catch(() => {
+            console.warn('[WARN] Previous Claude statusline capture could not be removed.');
+        });
+
         // Configure Web Push (VAPID keys)
         configureWebPush();
 
@@ -366,6 +373,18 @@ async function startServer() {
             console.log(`${terminalTextStyles.info('[INFO]')} Installed at: ${terminalTextStyles.dim(appInstallPath)}`);
             console.log(`${terminalTextStyles.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
             console.log('');
+
+            // OpenCode turn servers a killed CloudCLI process left behind keep
+            // running until stopped; this is the first chance to do so.
+            void reapOrphanedOpenCodeServers()
+                .then((count) => {
+                    if (count > 0) {
+                        console.log(`${terminalTextStyles.info('[INFO]')} Stopped ${count} OpenCode server(s) left running by an earlier CloudCLI process`);
+                    }
+                })
+                .catch((error) => {
+                    console.warn('[WARN] Could not check for leftover OpenCode servers:', getErrorMessage(error));
+                });
 
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();

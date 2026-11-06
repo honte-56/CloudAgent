@@ -7,7 +7,6 @@ import test from 'node:test';
 import { queryClaudeSDK } from '@/modules/providers/list/claude/claude-runtime.provider.js';
 import { codexRuntime } from '@/modules/providers/list/codex/codex-runtime.provider.js';
 import { cursorRuntime } from '@/modules/providers/list/cursor/cursor-runtime.provider.js';
-import { opencodeRuntime } from '@/modules/providers/list/opencode/opencode-runtime.provider.js';
 import { CodexLiveClient } from '@/modules/providers/list/codex/codex-live.client.js';
 import { createCodexLiveRuntime } from '@/modules/providers/list/codex/codex-live-runtime.provider.js';
 import type { ProviderRuntimeContext } from '@/shared/index.js';
@@ -28,7 +27,7 @@ test('Claude SDK receives run-local environment', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const provider of ['codex', 'cursor', 'opencode'] as const) {
+for (const provider of ['codex', 'cursor'] as const) {
   test(`${provider} CLI receives authentication without putting it into arguments`, async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cli-env-'));
     const previousPath = process.env.PATH, previousCodex = process.env.CLOUDCLI_CODEX_PATH, previousRuntime = process.env.CLOUDCLI_CODEX_RUNTIME;
@@ -39,7 +38,7 @@ for (const provider of ['codex', 'cursor', 'opencode'] as const) {
     process.env.CLOUDCLI_CODEX_PATH = executable;
     process.env.CLOUDCLI_CODEX_RUNTIME = 'exec';
     try {
-      const runtime = { codex: codexRuntime, cursor: cursorRuntime, opencode: opencodeRuntime }[provider];
+      const runtime = { codex: codexRuntime, cursor: cursorRuntime }[provider];
       await runtime.run('hello', { cwd: root, environment: { ...process.env, GH_TOKEN: `fixture-${provider}` } }, writer, context);
       const result = JSON.parse(await readFile(capture, 'utf8'));
       assert.equal(result.token, `fixture-${provider}`);
@@ -70,7 +69,7 @@ test('Codex live runtime forwards run-local credentials and enables shell inheri
     const runtime = createCodexLiveRuntime((notify, _fail, env) => {
       environment = env;
       return { initialize: async () => {}, close() {}, async call(method, params) {
-        if (method.startsWith('thread/')) { config = params.config; return { thread: { id: 'thread' } }; }
+        if (method === 'thread/start' || method === 'thread/resume') { config = params.config; return { thread: { id: 'thread' } }; }
         notify('turn/completed', { turn: { id: 'turn', status: 'completed' } });
         return { turn: { status: 'completed' } };
       } };

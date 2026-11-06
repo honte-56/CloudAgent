@@ -26,11 +26,15 @@ async function withForkableClaude(
   const directory = await mkdtemp(path.join(os.tmpdir(), 'session-fork-'));
   const sourcePath = path.join(directory, 'native-source.jsonl');
   const forkedPath = path.join(directory, 'native-fork.jsonl');
-  await writeFile(sourcePath, '{}\n', 'utf8');
+  await writeFile(sourcePath, [
+    { type: 'user', uuid: 'uuid-1', parentUuid: null, sessionId: 'native-source', timestamp: '2026-11-03T00:00:00Z', message: { role: 'user', content: 'Original prompt' } },
+    { type: 'assistant', uuid: 'uuid-3', parentUuid: 'uuid-1', sessionId: 'native-source', timestamp: '2026-11-03T00:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Original answer' }], stop_reason: 'end_turn' } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n', 'utf8');
   await writeFile(forkedPath, '{}\n', 'utf8');
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(directory, 'auth.db');
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   const calls: ForkCall[] = [];
@@ -63,8 +67,10 @@ async function withForkableClaude(
 
 function seedSource(directory: string): void {
   const now = new Date().toISOString();
+  sessionsDb.createAppSession(SOURCE_ID, 'claude', directory, 'Original session');
+  sessionsDb.assignProviderSessionId(SOURCE_ID, 'native-source');
   sessionsDb.createSession(
-    SOURCE_ID,
+    'native-source',
     'claude',
     directory,
     'Original session',
@@ -72,7 +78,6 @@ function seedSource(directory: string): void {
     now,
     path.join(directory, 'native-source.jsonl'),
   );
-  sessionsDb.assignProviderSessionId(SOURCE_ID, 'native-source');
 }
 
 test('a fork becomes an independent session that points back at its source', async () => {
@@ -169,5 +174,16 @@ test('forking a session that does not exist is a 404', async () => {
       () => sessionsService.forkSessionById('no-such-session'),
       (error: Error & { code?: string }) => error.code === 'SESSION_NOT_FOUND',
     );
+  });
+});
+
+
+test('the session menu selects the latest completed boundary and rejects unknown message anchors', async () => {
+  await withForkableClaude(async ({ calls, directory }) => {
+    seedSource(directory);
+    await assert.rejects(() => sessionsService.forkSessionById(SOURCE_ID, { upToAnchorId: 'missing' }), (error: Error & { code?: string }) => error.code === 'FORK_POINT_NOT_READY');
+    assert.equal(calls.length, 0);
+    await sessionsService.forkSessionById(SOURCE_ID);
+    assert.equal(calls[0].upToAnchorId, 'uuid-3');
   });
 });

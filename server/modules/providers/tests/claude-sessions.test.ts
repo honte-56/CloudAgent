@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import nodeFs from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,7 +8,7 @@ import test from 'node:test';
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
 import { ClaudeSessionSynchronizer } from '@/modules/providers/list/claude/claude-session-synchronizer.provider.js';
-import { buildLookupMap } from '@/shared/utils.js';
+import { buildLookupMap, extractFirstValidJsonlData } from '@/shared/utils.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -15,6 +16,8 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  // Start empty instead of letting initialization import the user's legacy DB.
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   try {
@@ -2238,6 +2241,126 @@ test('Claude history ignores the CLI api-request bookkeeping rows instead of rep
       assert.equal(history.messages.some((message) => String(message.content).startsWith('[Image: source')), false);
     });
   } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('split assistant block identities stay stable across repeated history reads and concurrent live normalization', async () => {
+  await withIsolatedDatabase(async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'claude-block-history-'));
+    try {
+      const lines = [
+        { type: 'assistant', uuid: 'empty-thinking', message: { id: 'response', role: 'assistant', content: [{ type: 'thinking', thinking: '' }] } },
+        { type: 'assistant', uuid: 'first-text', message: { id: 'response', role: 'assistant', content: [{ type: 'text', text: 'First' }] } },
+        { type: 'assistant', uuid: 'second-text', message: { id: 'response', role: 'assistant', content: [{ type: 'text', text: 'Second' }] } },
+      ].map(row => ({ ...row, sessionId: 'native-blocks', timestamp: '2026-11-05T09:43:40.000Z' }));
+      const file = path.join(directory, 'native-blocks.jsonl');
+      await writeFile(file, lines.map(row => JSON.stringify(row)).join('\n') + '\n');
+      sessionsDb.createSession('blocks', 'claude', directory, 'blocks', undefined, undefined, file);
+      const provider = new ClaudeSessionsProvider({ getLiveRunStartTime: () => null });
+      provider.normalizeMessage(lines[0], 'blocks');
+      const history = await provider.fetchHistory('blocks', { providerSessionId: 'native-blocks' });
+      assert.deepEqual(history.messages.map(row => row.messageKey), ['claude-block:response:1', 'claude-block:response:2']);
+      assert.equal(provider.normalizeMessage(lines[1], 'blocks')[0].messageKey, 'claude-block:response:1');
+      const page = await provider.fetchHistory('blocks', { providerSessionId: 'native-blocks', limit: 1 });
+      assert.equal(page.messages[0].messageKey, 'claude-block:response:2');
+      assert.deepEqual((await provider.fetchHistory('blocks', { providerSessionId: 'native-blocks' })).messages.map(row => row.id), history.messages.map(row => row.id));
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
+
+// Regression tests: a single malformed JSONL line must not discard the rest of
+// the file, and extractFirstValidJsonlData must release the file handle on
+// every exit path. Both helpers back the per-provider session synchronizers.
+
+test('buildLookupMap keeps entries after a malformed line instead of stopping there', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'jsonl-lookup-'));
+
+  try {
+    const filePath = path.join(tempRoot, 'history.jsonl');
+    await writeFile(
+      filePath,
+      [
+        JSON.stringify({ sessionId: 'session-before', title: 'Before the bad line' }),
+        '{ this is not valid json',
+        JSON.stringify({ sessionId: 'session-after', title: 'After the bad line' }),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const lookup = await buildLookupMap(filePath, 'sessionId', 'title');
+
+    assert.equal(lookup.get('session-before'), 'Before the bad line');
+    assert.equal(lookup.get('session-after'), 'After the bad line', 'the entry after a malformed line must survive');
+    assert.equal(lookup.size, 2);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('extractFirstValidJsonlData skips a malformed line and returns a later valid row', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'jsonl-extract-'));
+
+  try {
+    const filePath = path.join(tempRoot, 'session.jsonl');
+    await writeFile(
+      filePath,
+      [
+        '{ half-written line',
+        JSON.stringify({ type: 'summary', sessionId: 'session-xyz' }),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await extractFirstValidJsonlData(filePath, (row) => {
+      const record = row as Record<string, unknown>;
+      return typeof record.sessionId === 'string' ? record.sessionId : null;
+    });
+
+    assert.equal(result, 'session-xyz');
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('extractFirstValidJsonlData closes the file stream on the no-match path', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'jsonl-fd-'));
+  // Assert the helper calls close() explicitly rather than checking `destroyed`:
+  // the no-match fixture reaches EOF and Node destroys the stream there anyway,
+  // so `destroyed` stays true even without the finally block. Counting close()
+  // calls is what actually fails if the cleanup is removed.
+  let closeCalls = 0;
+  let createdStreams = 0;
+  const originalCreateReadStream = nodeFs.createReadStream;
+  (nodeFs as { createReadStream: typeof nodeFs.createReadStream }).createReadStream = ((
+    ...args: Parameters<typeof nodeFs.createReadStream>
+  ) => {
+    const stream = originalCreateReadStream(...args);
+    createdStreams += 1;
+    const originalClose = stream.close.bind(stream);
+    stream.close = ((...closeArgs: Parameters<typeof stream.close>) => {
+      closeCalls += 1;
+      return originalClose(...closeArgs);
+    }) as typeof stream.close;
+    return stream;
+  }) as typeof nodeFs.createReadStream;
+
+  try {
+    const filePath = path.join(tempRoot, 'session.jsonl');
+    // Only malformed rows, so the extractor never matches and the function
+    // returns null without ever hitting the success branch that used to be the
+    // only place the stream was closed.
+    await writeFile(filePath, ['{ bad one', '{ bad two', ''].join('\n'), 'utf8');
+
+    const result = await extractFirstValidJsonlData(filePath, () => 'never');
+
+    assert.equal(result, null);
+    assert.equal(createdStreams, 1);
+    assert.equal(closeCalls, 1, 'the read stream must be closed even when no row matches');
+  } finally {
+    (nodeFs as { createReadStream: typeof nodeFs.createReadStream }).createReadStream = originalCreateReadStream;
     await rm(tempRoot, { recursive: true, force: true });
   }
 });

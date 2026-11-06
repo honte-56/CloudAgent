@@ -1,6 +1,7 @@
+import { MessageForkButton } from '@/modules/chat/transcript/MessageForkButton';
 import { memo, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GitBranchIcon, PencilIcon } from 'lucide-react';
+import { PencilIcon } from 'lucide-react';
 
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LLMProvider,DiffLine,Project } from '@/shared/types';
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
@@ -38,7 +39,7 @@ type MessageComponentProps = {
    * Branches the conversation into a new session ending at this message.
    * Absent when the provider cannot copy a transcript prefix.
    */
-  onForkFromMessage?: (message: ChatMessage) => void;
+  onForkFromMessage?: (message: ChatMessage) => void | Promise<void>;
 };
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
@@ -132,17 +133,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       <PencilIcon className="h-3.5 w-3.5" />
                     </button>
                   )}
-                  {onForkFromMessage && message.transcriptAnchorId && (
-                    <button
-                      type="button"
-                      onClick={() => onForkFromMessage(message)}
-                      title={t('message.forkFromHere')}
-                      aria-label={t('message.forkFromHere')}
-                      className="rounded p-1 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
-                    >
-                      <GitBranchIcon className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                  {!isExporting && onForkFromMessage && <MessageForkButton message={message} onFork={onForkFromMessage} />}
                   {shouldShowUserCopyControl && (
                     <MessageCopyControl content={userCopyContent} messageType="user" />
                   )}
@@ -152,6 +143,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             ) : (
               /* Attachment-only turn: no text bubble, but the timestamp still shows */
               <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                {!isExporting && onForkFromMessage && <MessageForkButton message={message} onFork={onForkFromMessage} />}
                 <span>{formattedTime}</span>
               </div>
             )}
@@ -417,6 +409,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 {shouldShowAssistantCopyControl && (
                   <MessageSpeakControl content={assistantCopyContent} />
                 )}
+                {shouldShowAssistantCopyControl && onForkFromMessage && <MessageForkButton message={message} onFork={onForkFromMessage} />}
                 {/* Which model actually answered, as the provider recorded it
                     on this row. Provenance rather than an affordance, so unlike
                     copy and speak it is not gated on the copy control, and an

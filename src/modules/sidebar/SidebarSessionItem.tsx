@@ -1,6 +1,8 @@
+import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
+import { useForkAction } from '@/modules/sidebar/hooks/useForkAction';
 import { memo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Check, CheckSquare, Edit2, Loader2, MoreHorizontal, Square, Trash2, X } from 'lucide-react';
+import { Check, CheckSquare, Edit2, GitBranch, Loader2, MoreHorizontal, Square, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Badge, Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants } from '@/shared/ui';
@@ -31,7 +33,7 @@ type SidebarSessionItemProps = {
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (sessionId: string, sessionTitle: string) => void;
   /** Branches this session into an independent one; absent when its provider cannot. */
-  onForkSession?: (session: SessionWithProvider) => void;
+  onForkSession?: (session: SessionWithProvider) => void | Promise<void>;
   /** This project's list is in bulk-selection mode: the row acts as a checkbox and hides its options. */
   isSelecting: boolean;
   /** Ticked for the pending bulk delete. Resolved by the list, which never ticks a running row. */
@@ -66,6 +68,8 @@ function SidebarSessionItem({
   t,
 }: SidebarSessionItemProps) {
   const isCompact = useCompactSidebar();
+  const forkableProviders = useSessionForkingProviders();
+  const forkAction = useForkAction(onForkSession ? () => onForkSession(session) : undefined);
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
   const compactSessionAge = formatCompactAge(sessionView.sessionTime, currentTime);
@@ -347,6 +351,14 @@ function SidebarSessionItem({
                   </span>
                 </button>
 
+                {onForkSession && forkableProviders.has(session.__provider) && (
+                  <button type="button" disabled={forkAction.pending} onClick={() => { void forkAction.run().then(() => setMobileOptionsOpen(false)); }}
+                    className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border bg-muted/35 px-4 py-3 text-left text-foreground disabled:opacity-50">
+                    {forkAction.pending ? <Loader2 className="h-5 w-5 animate-spin" /> : <GitBranch className="h-5 w-5" />}
+                    <span className="min-w-0"><span className="block text-sm font-medium">{t(forkAction.pending ? 'buttons.forkingSession' : 'buttons.forkSession')}</span>
+                      <span className="block text-xs text-muted-foreground">{t('messages.forkCompletedHistory')}</span></span>
+                  </button>
+                )}
                 {!isProcessing && (
                   <button
                     type="button"
@@ -409,6 +421,7 @@ function SidebarSessionItem({
             }
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
+            if (event.detail > 1) return;
             onSessionSelect(session, project.projectId);
           }}
           onKeyDown={isSelecting ? handleSelectionKeyDown : undefined}
@@ -428,6 +441,12 @@ function SidebarSessionItem({
                 <div
                   className="min-w-0 flex-1 truncate text-sm font-normal text-foreground"
                   title={sessionView.sessionName}
+                  onDoubleClick={(event) => {
+                    if (isSelecting || isEditing || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onStartEditingSession(project.projectId, session.id, sessionView.sessionName);
+                  }}
                 >
                   {sessionView.sessionName}
                 </div>

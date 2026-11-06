@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
 
 import { Input } from '@/shared/ui';
-import { shouldShowGithubAuthentication } from '@/modules/project-creation-wizard/utils/pathUtils';
 import type { GithubTokenCredential, TokenMode } from '@/shared/types';
 import GithubAuthenticationCard from '@/modules/project-creation-wizard/GithubAuthenticationCard';
 import WorkspacePathField from '@/modules/project-creation-wizard/WorkspacePathField';
@@ -43,7 +42,6 @@ export default function StepConfiguration({
   onAdvanceToConfirm,
 }: StepConfigurationProps) {
   const { t } = useTranslation();
-  const showGithubAuth = shouldShowGithubAuthentication(githubUrl);
 
   return (
     <div className="space-y-4">
@@ -81,7 +79,7 @@ export default function StepConfiguration({
         </p>
       </div>
 
-      {showGithubAuth && (
+      {(
         <GithubAuthenticationCard
           tokenMode={tokenMode}
           selectedGithubToken={selectedGithubToken}

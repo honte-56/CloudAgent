@@ -1,6 +1,9 @@
+import { transformCodexItem } from '@/modules/providers/list/codex/codex-items.provider.js';
+import { createHash } from 'node:crypto';
 import fsSync from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import readline from 'node:readline';
 
 import { sessionsDb } from '@/modules/database/index.js';
@@ -16,6 +19,7 @@ import type {
   NormalizedMessage,
   SubagentActivity,
   SubagentInfo,
+  WorkflowAgentActivity,
 } from '@/shared/types.js';
 import {
   AppError,
@@ -91,6 +95,7 @@ function createCodexTurnTracker() {
   const liveTurnIds: string[] = [];
   const seenTurnIds = new Set<string>();
   const rolledBackTurnIds = new Set<string>();
+  const completedTurnIds = new Set<string>();
   let currentTurnId: string | undefined;
 
   return {
@@ -105,10 +110,12 @@ function createCodexTurnTracker() {
         return;
       }
 
-      const turnId = readNonEmptyString(payload.turn_id);
+      const completed = entryType === 'event_msg' && ['task_complete', 'turn_complete', 'turn_aborted'].includes(payload.type);
+      const turnId = readNonEmptyString(payload.turn_id) ?? (completed ? currentTurnId : undefined);
       if (!turnId) {
         return;
       }
+      if (completed) completedTurnIds.add(turnId);
       currentTurnId = turnId;
       if (!seenTurnIds.has(turnId)) {
         seenTurnIds.add(turnId);
@@ -122,6 +129,7 @@ function createCodexTurnTracker() {
     getLiveTurnIds(): string[] {
       return liveTurnIds;
     },
+    isCompleted(turnId: string): boolean { return completedTurnIds.has(turnId) && !rolledBackTurnIds.has(turnId); },
     isRolledBack(turnId: string): boolean {
       return rolledBackTurnIds.has(turnId);
     },
@@ -137,10 +145,7 @@ function createCodexTurnTracker() {
  */
 async function readCodexLiveTurnIds(filePath: string): Promise<string[]> {
   const turns = createCodexTurnTracker();
-  const stream = fsSync.createReadStream(filePath);
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-  for await (const line of lines) {
+  for await (const line of readCodexRolloutLines(filePath)) {
     if (!line.trim()) {
       continue;
     }
@@ -157,6 +162,101 @@ async function readCodexLiveTurnIds(filePath: string): Promise<string[]> {
   }
 
   return turns.getLiveTurnIds();
+}
+
+/** Resolve reference-backed history without requiring the source to remain indexed. */
+async function findCodexHistorySource(filePath: string, threadId: string): Promise<string | null> {
+  const indexed = sessionsDb.getSessionByProviderSessionId(threadId);
+  if (indexed?.provider === PROVIDER && indexed.jsonl_path) {
+    try {
+      if ((await fsp.stat(indexed.jsonl_path)).isFile()) {
+        return indexed.jsonl_path;
+      }
+    } catch {
+      // The native CLI can archive a rollout without updating the app row.
+    }
+  }
+
+  let directory = path.dirname(filePath);
+  while (path.dirname(directory) !== directory) {
+    if (path.basename(directory) === 'sessions' || path.basename(directory) === 'archived_sessions') {
+      const home = path.dirname(directory);
+      for (const storage of ['sessions', 'archived_sessions']) {
+        const found = await findFileWithSuffix(path.join(home, storage), `-${threadId}.jsonl`, 3);
+        if (found) return found;
+      }
+      break;
+    }
+    directory = path.dirname(directory);
+  }
+  return null;
+}
+
+/**
+ * Codex 0.160 paginated forks keep a frozen prefix in `history_base` instead
+ * of copying it. Read each ancestor only through its recorded byte boundary,
+ * then the child's own rows. `forked_from_id` alone also appears on copied
+ * legacy rollouts and must never cause history to be included twice.
+ */
+async function* readCodexRolloutLines(
+  filePath: string,
+  endByteOffset?: number,
+  ancestors = new Set<string>(),
+): AsyncGenerator<string> {
+  const canonicalPath = await fsp.realpath(filePath);
+  if (ancestors.has(canonicalPath) || ancestors.size >= 128) {
+    throw new AppError('Codex fork history contains a cyclic or excessively deep source chain.', {
+      code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+    });
+  }
+  if (endByteOffset !== undefined) {
+    if ((await fsp.stat(canonicalPath)).size < endByteOffset) {
+      throw new AppError('The source transcript is shorter than the Codex fork snapshot.', {
+        code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+      });
+    }
+    if (endByteOffset === 0) return;
+  }
+  const nextAncestors = new Set(ancestors).add(canonicalPath);
+  const stream = fsSync.createReadStream(canonicalPath, {
+    ...(endByteOffset !== undefined ? { end: endByteOffset - 1 } : {}),
+  });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let readMetadata = false;
+  try {
+    for await (const line of lines) {
+      let entry: AnyRecord | undefined;
+      if (!readMetadata) {
+        try { entry = readObjectRecord(JSON.parse(line)) ?? undefined; } catch { /* Skip malformed rows. */ }
+      }
+      if (entry?.type === 'session_meta') {
+        readMetadata = true;
+        const payload = readObjectRecord(entry.payload);
+        if (payload?.history_base != null) {
+          const base = readObjectRecord(payload.history_base);
+          const threadId = readNonEmptyString(base?.thread_id);
+          const offset = base?.end_byte_offset;
+          if (!threadId || !/^[a-zA-Z0-9-]+$/.test(threadId)
+            || typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
+            throw new AppError('Codex fork history has an invalid source boundary.', {
+              code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+            });
+          }
+          const sourcePath = await findCodexHistorySource(canonicalPath, threadId);
+          if (!sourcePath) {
+            throw new AppError('The source transcript referenced by this Codex fork is unavailable.', {
+              code: 'CODEX_HISTORY_SOURCE_UNAVAILABLE', statusCode: 502,
+            });
+          }
+          yield* readCodexRolloutLines(sourcePath, offset, nextAncestors);
+        }
+      }
+      yield line;
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
 }
 
 /**
@@ -208,7 +308,7 @@ function extractCodexTextContent(content: unknown): string {
 
       const record = item as AnyRecord;
       if (
-        (record.type === 'input_text' || record.type === 'output_text' || record.type === 'text')
+        (record.type === 'input_text' || record.type === 'output_text' || record.type === 'text' || record.type === 'Text')
         && typeof record.text === 'string'
       ) {
         return record.text;
@@ -845,6 +945,7 @@ function rewritePatchRows(
   const keptRows: AnyRecord[] = [];
   for (const [index, change] of changes.entries()) {
     const replacement = fileChangeToToolMessage(change, String(rows[0]?.timestamp ?? ''), `${callId}#${index}`);
+    replacement.fallbackFileTurn = rows[0]?.fallbackFileTurn;
     const existing = rowsByPath.get(change.filePath);
     if (existing) {
       existing.toolName = replacement.toolName;
@@ -877,6 +978,7 @@ type CodexSubagentRecord = {
   agentPath?: string;
   agentThreadId?: string;
   isComplete: boolean;
+  lifecycleAt?: number;
 };
 
 function parseCodexSubagentMessage(payload: AnyRecord): {
@@ -961,6 +1063,8 @@ async function findFileWithSuffix(directory: string, suffix: string, depth: numb
 }
 
 type CodexSubagentTranscript = {
+  status?: SubagentInfo['status'];
+  statusAt?: number;
   activity: SubagentActivity[];
   nickname?: string;
   agentPath?: string;
@@ -1016,6 +1120,13 @@ async function readCodexSubagentTranscript(filePath: string): Promise<CodexSubag
     if (entry.type === 'turn_context') {
       transcript.model = readNonEmptyString(payload.model) ?? transcript.model;
       continue;
+    }
+
+    if (entry.type === 'event_msg') {
+      if (payload.type === 'task_started') transcript.status = 'running';
+      else if (payload.type === 'task_complete' || payload.type === 'turn_complete') transcript.status = 'completed';
+      else if (payload.type === 'turn_aborted') transcript.status = 'stopped';
+      if (['task_started', 'task_complete', 'turn_complete', 'turn_aborted'].includes(payload.type)) transcript.statusAt = Date.parse(entry.timestamp) || 0;
     }
 
     if (entry.type !== 'response_item') {
@@ -1198,7 +1309,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
     return { messages: [], total: 0, hasMore: false };
   }
 
-  const messages: AnyRecord[] = [];
+  let messages: AnyRecord[] = [];
   let tokenUsage: AnyRecord | null = null;
 
   /** Call ids whose orchestration wrapper must never reach the transcript. */
@@ -1231,9 +1342,12 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
   const turns = createCodexTurnTracker();
   /** Turns whose prompt already carries the anchor, so only the first does. */
   const anchoredTurnIds = new Set<string>();
-
-  const fileStream = fsSync.createReadStream(sessionFilePath);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  const typedAssistantRows: AnyRecord[] = [];
+  const nativeItemTurns = new Set<string>();
+  const nativeItemTimes = new Map<string, string>();
+  const nativeSubagentActivity: Array<{ item: AnyRecord; timestamp: string }> = [];
+  const followupCalls = new Set<string>();
+  const wireAssistantIds = new Set<string>();
 
   /** Emits a tool_result row unless the call already produced one. */
   const pushToolResult = (callId: string, timestamp: string, output: string, isError: boolean) => {
@@ -1244,7 +1358,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
     messages.push({ type: 'tool_result', timestamp, toolCallId: callId, output, isError });
   };
 
-  for await (const line of rl) {
+  for await (const line of readCodexRolloutLines(sessionFilePath)) {
     if (!line.trim()) {
       continue;
     }
@@ -1319,7 +1433,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
           // not in this file; the rows still belong in the transcript.
           const rows = changes.map((change, index) =>
             fileChangeToToolMessage(change, timestamp, `${callId}#${index}`));
-          rows.forEach((row) => messages.push(row));
+          rows.forEach((row) => { row.fallbackFileTurn = turns.getCurrentTurnId(); messages.push(row); });
           patchGroups.set(callId, {
             callId,
             rows,
@@ -1349,6 +1463,23 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
       // `UserMessage`; wire `response_item` user rows are internal, not prompts.
       if (payload.type === 'item_completed') {
         const item = readObjectRecord(payload.item);
+        if (item?.type === 'SubAgentActivity') nativeSubagentActivity.push({ item, timestamp });
+        const itemTurnId = readNonEmptyString(payload.turn_id) ?? turns.getCurrentTurnId();
+        const startedAt = typeof payload.started_at_ms === 'number' ? payload.started_at_ms : null;
+        const itemTimestamp = startedAt !== null && Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : timestamp;
+        if (item?.id) nativeItemTimes.set(item.id, itemTimestamp);
+        // Lifecycle-stamped item records are the CLI's authoritative display
+        // timeline. Code-mode exec wrappers use unrelated call IDs and must not
+        // be synthesized into a second copy of their native command items.
+        if (itemTurnId && (startedAt !== null || item?.type === 'CommandExecution')) nativeItemTurns.add(itemTurnId);
+        if (item?.type === 'CommandExecution' || item?.type === 'FileChange') {
+          messages.push({ type: 'native_item', timestamp: itemTimestamp, item, forkTurnId: itemTurnId });
+        }
+        if (item?.type === 'AgentMessage') {
+          const content = extractCodexTextContent(item.content);
+          if (content.trim()) typedAssistantRows.push({ uuid: item.id, type: 'assistant', timestamp: itemTimestamp,
+            message: { role: 'assistant', content }, forkTurnId: readNonEmptyString(payload.turn_id) ?? turns.getCurrentTurnId() });
+        }
         if (item?.type === 'UserMessage') {
           const content = extractCodexTextContent(item.content);
           const images = extractCodexTypedUserImages(item.content);
@@ -1363,10 +1494,12 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
               anchoredTurnIds.add(turnId as string);
             }
             const row: AnyRecord = {
+              uuid: readNonEmptyString(item.client_id) ?? readNonEmptyString(item.clientId) ?? readNonEmptyString(item.id),
               type: 'user',
-              timestamp,
+              timestamp: itemTimestamp,
               message: { role: 'user', content },
               ...(images ? { images } : {}),
+              forkTurnId: turnId,
               ...(isFirstPromptOfTurn ? { turnId } : {}),
             };
             messages.push(row);
@@ -1390,6 +1523,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
           timestamp,
           message: { role: 'user', content: payload.message },
           images: extractCodexUserImages(payload),
+          forkTurnId: turnId,
           ...(isFirstPromptOfTurn ? { turnId } : {}),
         });
       }
@@ -1402,6 +1536,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
 
     // ── response_item ──────────────────────────────────────────────────────
     if (payload.type === 'message' && payload.role === 'assistant') {
+      if (typeof payload.id === 'string') wireAssistantIds.add(payload.id);
       const cited = readCodexMemoryCitations(extractCodexTextContent(payload.content));
       const textContent = cited.text;
       if (!textContent.trim()) {
@@ -1424,8 +1559,10 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
       }
 
       messages.push({
+        uuid: payload.id,
         type: 'assistant',
         timestamp,
+        forkTurnId: turns.getCurrentTurnId(),
         message: { role: 'assistant', content: textContent },
         memoryCitations: cited.memoryCitations,
       });
@@ -1438,6 +1575,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
         : '';
       if (summaryText.trim()) {
         messages.push({
+          uuid: payload.id,
           type: 'thinking',
           timestamp,
           message: { role: 'assistant', content: summaryText },
@@ -1496,6 +1634,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
           output: agentMessage.result,
         });
         subagent.isComplete = true;
+        subagent.lifecycleAt = Date.parse(timestamp) || 0;
       }
       continue;
     }
@@ -1551,6 +1690,8 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
         ignoredToolCallIds.add(callId);
         continue;
       }
+
+      if (name === 'followup_task') followupCalls.add(callId);
 
       if (CODEX_COLLABORATION_CONTROL_TOOLS.has(name)) {
         ignoredToolCallIds.add(callId);
@@ -1615,6 +1756,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
 
         if (shellCommands.length > 0) {
           const shellMessage: AnyRecord = {
+            fallbackCommandTurn: turns.getCurrentTurnId(),
             type: 'tool_use',
             timestamp,
             toolName: 'Bash',
@@ -1656,7 +1798,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
           const changes = patches.flatMap((patch) => parseCodexPatch(patch.patch));
           const rows = changes.map((change, index) =>
             fileChangeToToolMessage(change, timestamp, index === 0 ? nextRowId() : `${callId}#${index}`));
-          rows.forEach((row) => messages.push(row));
+          rows.forEach((row) => { row.fallbackFileTurn = turns.getCurrentTurnId(); messages.push(row); });
           patchGroups.set(callId, { callId, rows, timestamp });
           pendingPatchCallId = callId;
         }
@@ -1672,7 +1814,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
       if (name === 'apply_patch') {
         const rows = parseCodexPatch(String(rawInput ?? ''))
           .map((change, index) => fileChangeToToolMessage(change, timestamp, `${callId}#${index}`));
-        rows.forEach((row) => messages.push(row));
+        rows.forEach((row) => { row.fallbackFileTurn = turns.getCurrentTurnId(); messages.push(row); });
         patchGroups.set(callId, { callId, rows, timestamp });
         pendingPatchCallId = callId;
         // The call's own output is a bare `{}`; the per-file rows carry the result.
@@ -1689,6 +1831,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
           command = String(rawInput ?? '');
         }
         const shellMessage: AnyRecord = {
+          fallbackCommandTurn: turns.getCurrentTurnId(),
           type: 'tool_use',
           timestamp,
           toolName: 'Bash',
@@ -1790,6 +1933,46 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
     }
   }
 
+  const obsoleteCommandIds = new Set(messages.filter(row => (row.fallbackCommandTurn && nativeItemTurns.has(row.fallbackCommandTurn)) || (row.fallbackFileTurn && nativeItemTurns.has(row.fallbackFileTurn))).map(row => row.toolCallId));
+  messages = messages.filter(row => !obsoleteCommandIds.has(row.toolCallId));
+  for (const row of messages) if (row.uuid && nativeItemTimes.has(row.uuid)) row.timestamp = nativeItemTimes.get(row.uuid);
+
+  for (const row of typedAssistantRows) if (!wireAssistantIds.has(row.uuid)) messages.push(row);
+  for (const row of messages) if (typeof row.forkTurnId === 'string' && turns.isCompleted(row.forkTurnId)) row.forkAnchorId = row.forkTurnId;
+
+  // Native activity items are lifecycle signals for the original Task, not
+  // standalone tools. Apply them after parsing so a late-written spawn record
+  // and a native completion always resolve to the same parent container.
+  for (const { item, timestamp } of nativeSubagentActivity) {
+    const childId = readNonEmptyString(item.agent_thread_id) ?? readNonEmptyString(item.agentThreadId);
+    const agentPath = readNonEmptyString(item.agent_path) ?? readNonEmptyString(item.agentPath);
+    let record = subagentsByCallId.get(item.id)
+      ?? [...subagentsByCallId.values()].find(entry => childId && entry.agentThreadId === childId)
+      ?? (agentPath ? subagentsByPath.get(agentPath) : undefined);
+    if (!record && item.kind === 'started') {
+      const launch: AnyRecord = { uuid: item.id, type: 'tool_use', timestamp, toolName: 'Task', toolCallId: item.id,
+        toolInput: JSON.stringify({ description: humanizeCodexToolName(agentPath?.split('/').pop() || 'agent') }) };
+      messages.push(launch);
+      record = { toolCallId: item.id, message: launch, isComplete: false };
+      subagentsByCallId.set(item.id, record);
+    }
+    if (!record) continue;
+    if (childId) record.agentThreadId = childId;
+    if (agentPath) { record.agentPath = agentPath; subagentsByPath.set(agentPath, record); }
+    const eventTime = Date.parse(timestamp) || 0;
+    if (eventTime >= (record.lifecycleAt ?? 0)) {
+      if (item.kind === 'completed') { record.isComplete = true; record.lifecycleAt = eventTime; }
+      else if (item.kind === 'started' || item.kind === 'interacted' && followupCalls.has(item.id)) {
+        record.isComplete = false; record.lifecycleAt = eventTime;
+      }
+    }
+  }
+  for (const record of subagentsByCallId.values()) {
+    if (record.isComplete && !messages.some(row => row.type === 'tool_result' && row.toolCallId === record.toolCallId)) {
+      messages.push({ type: 'tool_result', timestamp: record.message.timestamp, toolCallId: record.toolCallId, output: '' });
+    }
+  }
+
   await attachCodexSubagentTranscripts(sessionFilePath, subagentsByCallId);
 
   // A rollback is recorded after the turns it retires, so a prompt can be
@@ -1842,6 +2025,7 @@ async function attachCodexSubagentTranscripts(
             .map(truncateSubagentActivity);
           subagent.activityCount = transcript.activity.length;
         }
+        if (transcript.status && (transcript.statusAt ?? 0) >= (record.lifecycleAt ?? 0)) subagent.status = transcript.status;
         subagent.name = transcript.nickname ?? agentName;
         subagent.model = transcript.model;
       }
@@ -1852,6 +2036,7 @@ async function attachCodexSubagentTranscripts(
   }
 }
 
+/** The provider registry uses this reader for session history and message edits. */
 export class CodexSessionsProvider implements IProviderSessions {
   /**
    * Resolves the last turn to keep when the turn `anchorId` names is replaced.
@@ -1942,8 +2127,12 @@ export class CodexSessionsProvider implements IProviderSessions {
    * by getCodexSessionMessages().
    */
   private normalizeHistoryEntry(raw: AnyRecord, sessionId: string | null): NormalizedMessage[] {
+    if (raw.type === 'native_item') {
+      const item = transformCodexItem(raw.item);
+      return item ? this.normalizeMessage({ ...item, timestamp: raw.timestamp }, sessionId) : [];
+    }
     const ts = raw.timestamp || new Date().toISOString();
-    const baseId = raw.uuid || generateMessageId('codex');
+    const baseId = raw.uuid || `history-${createHash('sha256').update(JSON.stringify([raw.type, raw.timestamp, raw.message, raw.toolCallId])).digest('hex').slice(0, 24)}`;
 
     if (raw.type === 'status_note' && typeof raw.content === 'string') {
       return [createNormalizedMessage({
@@ -2017,7 +2206,8 @@ export class CodexSessionsProvider implements IProviderSessions {
         return [];
       }
       return [createNormalizedMessage({
-        id: baseId,
+        id: `codex:${baseId}`,
+        messageKey: `codex:${baseId}`,
         sessionId,
         timestamp: ts,
         provider: PROVIDER,
@@ -2082,6 +2272,8 @@ export class CodexSessionsProvider implements IProviderSessions {
       const itemId = readNonEmptyString(raw.itemId as string | undefined) ?? baseId;
 
       switch (raw.itemType) {
+        case 'subagent_activity':
+          return [createNormalizedMessage({ id: itemId, sessionId, timestamp: ts, provider: PROVIDER, kind: 'status', historyChanged: true })];
         case 'agent_message': {
           const cited = readCodexMemoryCitations(String(raw.message?.content || ''));
           const text = cited.text;
@@ -2090,7 +2282,8 @@ export class CodexSessionsProvider implements IProviderSessions {
             // Same unification as history: a proposed plan is a plan card, not
             // an assistant paragraph that happens to start with a tag.
             return [createNormalizedMessage({
-              id: itemId,
+              id: `codex:${itemId}`,
+            messageKey: `codex:${itemId}`,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
@@ -2102,7 +2295,8 @@ export class CodexSessionsProvider implements IProviderSessions {
             })];
           }
           return [createNormalizedMessage({
-            id: itemId,
+            id: `codex:${itemId}`,
+            messageKey: `codex:${itemId}`,
             sessionId,
             timestamp: ts,
             provider: PROVIDER,
@@ -2153,19 +2347,20 @@ export class CodexSessionsProvider implements IProviderSessions {
           })];
         }
         case 'file_change': {
-          // One row per file so each change gets the same diff view as an Edit.
           const changes = Array.isArray(raw.changes) ? raw.changes : [];
-          return changes.map((change: AnyRecord, index: number) => createNormalizedMessage({
-            id: `${itemId}_${index}`,
-            sessionId,
-            timestamp: ts,
-            provider: PROVIDER,
-            kind: 'tool_use',
-            toolName: change?.kind === 'add' ? 'Write' : 'Edit',
-            toolInput: { file_path: change?.path, old_string: '', new_string: '' },
-            toolId: `${itemId}_${index}`,
-            status: raw.status,
-          }));
+          return changes.flatMap((change: AnyRecord, index: number) => {
+            const diff = unifiedDiffToTexts(String(change.diff || ''));
+            const oldText = change.kind === 'add' ? '' : change.kind === 'delete' && typeof change.content === 'string' ? change.content : diff.oldText;
+            const newText = change.kind === 'delete' ? '' : change.kind === 'add' && typeof change.content === 'string' ? change.content : diff.newText;
+            const toolUse = createNormalizedMessage({ id: `${itemId}_${index}`, sessionId, timestamp: ts, provider: PROVIDER,
+              kind: 'tool_use', toolName: change.kind === 'add' ? 'Write' : 'Edit',
+              toolInput: { file_path: change.path, old_string: oldText, new_string: newText, ...(change.kind === 'delete' ? { deleted: true } : {}) },
+              toolId: `${itemId}_${index}`, status: raw.status });
+            return ['completed', 'failed', 'interrupted', 'cancelled'].includes(raw.status)
+              ? [toolUse, createNormalizedMessage({ id: `${itemId}_${index}_result`, sessionId, timestamp: ts, provider: PROVIDER,
+                kind: 'tool_result', toolId: `${itemId}_${index}`, content: raw.output || '', isError: raw.status !== 'completed' })]
+              : [toolUse];
+          });
         }
         case 'mcp_tool_call': {
           const toolName = raw.server ? `mcp__${String(raw.server)}__${String(raw.tool ?? 'tool')}` : String(raw.tool || 'MCP');
@@ -2271,6 +2466,19 @@ export class CodexSessionsProvider implements IProviderSessions {
     return [];
   }
 
+  /** Reads the existing child rollout for the task sidebar without starting a runtime. */
+  async readSubagentActivity(sessionId: string, agentId: string, limit = MAX_TRANSMITTED_SUBAGENT_ACTIVITIES): Promise<WorkflowAgentActivity | null> {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(agentId)) return null;
+    const parent = sessionsDb.getSessionById(sessionId);
+    if (!parent?.jsonl_path) return null;
+    const stored = sessionsDb.getSessionByProviderSessionId(agentId);
+    const file = stored?.provider === PROVIDER ? stored.jsonl_path : await findCodexSubagentRollout(parent.jsonl_path, agentId);
+    if (!file) return null;
+    const transcript = await readCodexSubagentTranscript(file);
+    return { agent: { id: agentId, label: transcript.nickname, model: transcript.model, status: transcript.status ?? 'running' },
+      activity: transcript.activity.slice(-limit).map(truncateSubagentActivity), activityCount: transcript.activity.length };
+  }
+
   /**
    * Loads Codex JSONL history and keeps token usage metadata when the
    * transcript reported it.
@@ -2285,6 +2493,10 @@ export class CodexSessionsProvider implements IProviderSessions {
     try {
       result = await getCodexSessionMessages(sessionId);
     } catch (error) {
+      // A broken inherited snapshot must not masquerade as an empty thread.
+      if (error instanceof AppError && error.code.startsWith('CODEX_HISTORY_SOURCE_')) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[CodexProvider] Failed to load session ${sessionId}:`, message);
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
@@ -2292,7 +2504,9 @@ export class CodexSessionsProvider implements IProviderSessions {
 
     const normalized: NormalizedMessage[] = [];
     for (const raw of result.messages) {
-      normalized.push(...this.normalizeHistoryEntry(raw, sessionId));
+      const rows = this.normalizeHistoryEntry(raw, sessionId);
+      for (const row of rows) if (typeof raw.forkAnchorId === 'string' && row.kind === 'text' && (row.role === 'user' || row.role === 'assistant')) row.forkAnchorId = raw.forkAnchorId;
+      normalized.push(...rows);
     }
 
     const toolResultMap = new Map<string, NormalizedMessage>();

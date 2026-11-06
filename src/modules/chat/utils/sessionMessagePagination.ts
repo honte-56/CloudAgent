@@ -3,6 +3,7 @@ import type { NormalizedMessage } from '@/shared/types';
 export const SESSION_MESSAGES_PAGE_SIZE = 20;
 
 export type SessionMessagesRequestOptions = {
+  before?: string;
   limit?: number | null;
   offset?: number;
 };

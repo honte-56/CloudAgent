@@ -15,7 +15,7 @@ import { getEditorStyles } from '@/modules/code-editor/utils/editorStyles';
 import { createEditorToolbarPanelExtension } from '@/modules/code-editor/utils/editorToolbarPanel';
 import CodeEditorFooter from '@/modules/code-editor/CodeEditorFooter';
 import CodeEditorHeader from '@/modules/code-editor/CodeEditorHeader';
-import CodeEditorLoadingState from '@/modules/code-editor/CodeEditorLoadingState';
+import { useFileActions } from '@/modules/code-editor/hooks/useFileActions';
 import CodeEditorSurface from '@/modules/code-editor/CodeEditorSurface';
 import CodeEditorBinaryFile from '@/modules/code-editor/CodeEditorBinaryFile';
 import CodeEditorMediaPreview from '@/modules/code-editor/CodeEditorMediaPreview';
@@ -31,6 +31,10 @@ type CodeEditorProps = {
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;
   onPopOut?: (() => void) | null;
+  // Standalone file links can open directly in preview mode.
+  initialPreview?: boolean;
+  // The standalone viewer has no workspace settings panel.
+  showSettings?: boolean;
 };
 
 /** Rendered by the code-editor module's own EditorSidebar, and re-exported on the module barrel, as the full CodeMirror editor for one open file. */
@@ -43,12 +47,16 @@ export default function CodeEditor({
   isExpanded = false,
   onToggleExpand = null,
   onPopOut = null,
+  initialPreview = false,
+  showSettings = true,
 }: CodeEditorProps) {
   const { t } = useTranslation('codeEditor');
   const paletteOps = usePaletteOps();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
-  const [markdownPreview, setMarkdownPreview] = useState(false);
+  // One preview toggle serves HTML and Markdown without changing the text buffer.
+  const [markdownPreview, setMarkdownPreview] = useState(initialPreview);
+  useEffect(() => setMarkdownPreview(initialPreview), [file.path, initialPreview]);
 
   // The code editor follows the app-wide theme; it has no theme of its own.
   const { isDarkMode } = useTheme();
@@ -72,11 +80,13 @@ export default function CodeEditor({
     fileProjectId,
     hasUnsavedChanges,
     handleSave,
-    handleDownload,
+    loadError,
   } = useCodeEditorDocument({
     file,
     projectPath,
   });
+
+  const { download, downloading, downloadError, metadata } = useFileActions(file, fileProjectId);
 
   // Every way of closing (Escape, the header X, the binary and media views)
   // goes through here: a dirty buffer asks first, a clean one closes at once.
@@ -137,7 +147,7 @@ export default function CodeEditor({
 
     const iframe = previewWindow.document.createElement('iframe');
     iframe.title = file.name;
-    iframe.sandbox.add('allow-forms', 'allow-modals', 'allow-popups', 'allow-scripts');
+    iframe.setAttribute('sandbox', 'allow-forms allow-modals allow-popups allow-scripts');
     iframe.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:white';
 
     iframe.srcdoc = content;
@@ -227,55 +237,6 @@ export default function CodeEditor({
     dependency: content,
   });
 
-  if (loading) {
-    return (
-      <CodeEditorLoadingState
-        isDarkMode={isDarkMode}
-        isSidebar={isSidebar}
-        loadingText={t('loading', { fileName: file.name })}
-      />
-    );
-  }
-
-  // Natively previewable media (image/pdf/audio/video) is rendered inline
-  // instead of showing the generic "cannot be displayed" placeholder.
-  if (previewKind) {
-    return (
-      <CodeEditorMediaPreview
-        file={file}
-        kind={previewKind}
-        projectId={fileProjectId}
-        isSidebar={isSidebar}
-        isFullscreen={isFullscreen}
-        onClose={requestClose}
-        onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
-        labels={{
-          loading: t('filePreview.loading', 'Loading preview...'),
-          error: t('filePreview.error', 'Unable to display this file.'),
-          openInNewTab: t('filePreview.openInNewTab', 'Open in new tab'),
-          fullscreen: t('actions.fullscreen', 'Fullscreen'),
-          exitFullscreen: t('actions.exitFullscreen', 'Exit fullscreen'),
-          close: t('actions.close', 'Close'),
-        }}
-      />
-    );
-  }
-
-  // Binary file display
-  if (isBinary) {
-    return (
-      <CodeEditorBinaryFile
-        file={file}
-        isSidebar={isSidebar}
-        isFullscreen={isFullscreen}
-        onClose={requestClose}
-        onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
-        title={t('binaryFile.title', 'Binary File')}
-        message={t('binaryFile.message', 'The file "{{fileName}}" cannot be displayed in the text editor because it is a binary file.', { fileName: file.name })}
-      />
-    );
-  }
-
   const outerContainerClassName = isSidebar
     ? 'w-full h-full flex flex-col'
     : `fixed inset-0 z-[9999] md:bg-black/50 md:flex md:items-center md:justify-center md:p-4 ${isFullscreen ? 'md:p-0' : ''}`;
@@ -295,64 +256,58 @@ export default function CodeEditor({
             file={file}
             isSidebar={isSidebar}
             isFullscreen={isFullscreen}
-            isMarkdownFile={isMarkdownFile}
-            isHtmlPreviewFile={isHtmlPreviewFile}
-            markdownPreview={markdownPreview}
+            projectId={fileProjectId}
+            canEdit={!isBinary && !previewKind && !loadError}
+            canPreview={(isMarkdownFile || isHtmlPreviewFile) && !loadError}
+            preview={markdownPreview}
+            loading={loading}
             saving={saving}
             saveSuccess={saveSuccess}
             hasUnsavedChanges={hasUnsavedChanges}
-            onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
-            onOpenHtmlPreview={openHtmlPreview}
-            onOpenSettings={() => paletteOps.openSettings('appearance')}
-            onDownload={handleDownload}
+            downloading={downloading}
+            onTogglePreview={() => setMarkdownPreview((previous) => !previous)}
+            onOpenHtmlPreview={isHtmlPreviewFile && !loadError ? openHtmlPreview : undefined}
+            onOpenSettings={showSettings ? () => paletteOps.openSettings('appearance') : undefined}
+            onDownload={download}
             onSave={handleSave}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
             onClose={requestClose}
-            labels={{
-              showingChanges: t('header.showingChanges'),
-              copyPath: t('actions.copyPath', 'Copy file path'),
-              pathCopied: t('actions.pathCopied', 'File path copied'),
-              editMarkdown: t('actions.editMarkdown'),
-              previewMarkdown: t('actions.previewMarkdown'),
-              previewHtml: t('actions.previewHtml', 'Open HTML preview in new tab'),
-              settings: t('toolbar.settings'),
-              download: t('actions.download'),
-              save: t('actions.save'),
-              saving: t('actions.saving'),
-              saved: t('actions.saved'),
-              fullscreen: t('actions.fullscreen'),
-              exitFullscreen: t('actions.exitFullscreen'),
-              close: t('actions.close'),
-              unsavedChanges: t('unsavedChanges.indicator', 'Unsaved changes'),
-            }}
           />
 
-          {saveError && (
+          {(saveError || downloadError) && (
             <div className="border-b border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
-              {saveError}
+              {saveError || downloadError}
             </div>
           )}
 
-          <div className="flex-1 overflow-hidden">
-            <CodeEditorSurface
-              content={content}
-              onChange={setContent}
-              markdownPreview={markdownPreview}
-              isMarkdownFile={isMarkdownFile}
-              isDarkMode={isDarkMode}
-              fontSize={fontSize}
-              showLineNumbers={showLineNumbers}
-              extensions={extensions}
-              gotoTarget={gotoTarget}
-            />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {loading ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('loading', { fileName: file.name })}</div>
+              : loadError ? <div role="alert" className="p-6 text-sm text-red-600">{loadError}</div>
+              : previewKind ? <CodeEditorMediaPreview file={file} kind={previewKind} projectId={fileProjectId}
+                labels={{ loading: t('filePreview.loading', 'Loading preview...'), error: t('filePreview.error', 'Unable to display this file.'),
+                  openInNewTab: t('filePreview.openInNewTab', 'Open in new tab'), fullscreen: t('actions.fullscreen'), exitFullscreen: t('actions.exitFullscreen'), close: t('actions.close') }} />
+              : isBinary ? <CodeEditorBinaryFile file={file} size={metadata?.size} downloading={downloading} onDownload={download} />
+              : isHtmlPreviewFile && markdownPreview ? <iframe title={file.name} srcDoc={content}
+                sandbox="allow-forms allow-modals allow-popups allow-scripts" className="h-full w-full border-0 bg-white" />
+              : <CodeEditorSurface
+                content={content}
+                onChange={setContent}
+                markdownPreview={markdownPreview}
+                isMarkdownFile={isMarkdownFile}
+                isDarkMode={isDarkMode}
+                fontSize={fontSize}
+                showLineNumbers={showLineNumbers}
+                extensions={extensions}
+                gotoTarget={gotoTarget}
+              />}
           </div>
 
-          <CodeEditorFooter
+          {!loading && !loadError && !previewKind && !isBinary && <CodeEditorFooter
             content={content}
             linesLabel={t('footer.lines')}
             charactersLabel={t('footer.characters')}
             shortcutsLabel={t('footer.shortcuts')}
-          />
+          />}
         </div>
       </div>
     </>

@@ -122,8 +122,8 @@ test('provider dispatch explains authentication only on the first turn and refre
     closeConnection();
     await createService().run(provider, 'After restart', { cwd: root, sessionId: appId }, writer);
     await service.run(provider, 'Native resume', { cwd: root, sessionId: nativeId }, writer);
-    assert.match(calls[0].command, /GitHub authentication configured/);
-    assert.match(calls[1].command, /GitHub authentication configured/);
+    assert.match(calls[0].command, /GitHub auth is preconfigured/);
+    assert.match(calls[1].command, /GitHub auth is preconfigured/);
     assert.ok(calls[1].command.endsWith('First turn'));
     assert.deepEqual(calls.slice(2).map((call) => call.command), ['Second turn', 'After restart', 'Native resume']);
     assert.deepEqual(calls.map((call) => call.token), ['test-secret-a', 'test-secret-a', 'test-secret-a', 'test-secret-b', 'test-secret-b']);

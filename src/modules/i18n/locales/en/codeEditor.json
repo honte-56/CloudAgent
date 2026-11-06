@@ -24,7 +24,15 @@
     "fullscreen": "Fullscreen",
     "close": "Close",
     "previewMarkdown": "Preview markdown",
-    "editMarkdown": "Edit markdown"
+    "editMarkdown": "Edit markdown",
+    "preview": "Preview",
+    "editSource": "Edit source",
+    "more": "More actions",
+    "copyLink": "Copy file link",
+    "linkCopied": "File link copied",
+    "copyFailed": "Copy failed. Please try again.",
+    "downloading": "Downloading...",
+    "downloadFailed": "Download failed"
   },
   "footer": {
     "lines": "Lines:",
@@ -33,12 +41,15 @@
   },
   "binaryFile": {
     "title": "Binary File",
-    "message": "The file \"{{fileName}}\" cannot be displayed in the text editor because it is a binary file."
+    "message": "The file \"{{fileName}}\" cannot be displayed in the text editor because it is a binary file.",
+    "downloadHint": "Preview is not available for this file. Download it to open it locally."
   },
   "filePreview": {
     "loading": "Loading preview...",
     "error": "Unable to display this file.",
-    "openInNewTab": "Open in new tab"
+    "openInNewTab": "Open in new tab",
+    "invalidLink": "This file link is incomplete.",
+    "missingProject": "Missing project identifier"
   },
   "unsavedChanges": {
     "confirmClose": "You have unsaved changes. Close this file and discard them?",

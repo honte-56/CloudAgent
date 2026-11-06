@@ -90,9 +90,18 @@ export const sessionsDb = {
     jsonlPath?: string | null
   ): string {
     const db = getConnection();
+    // Check at persistence time too: a scan may have started before a replay
+    // replaced this native id. Do not resurrect its abandoned transcript.
+    const superseded = db.prepare('SELECT session_id FROM superseded_provider_sessions WHERE provider_session_id = ? AND provider = ?')
+      .get(providerSessionId, provider) as { session_id: string } | undefined;
+    if (superseded) return superseded.session_id;
     const createdAtValue = normalizeTimestamp(createdAt);
     const updatedAtValue = normalizeTimestamp(updatedAt);
-    const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
+    // Explicit directory changes override the historical cwd embedded in provider transcripts.
+    const explicitProject = db.prepare(`SELECT p.project_path FROM session_project_bindings b
+      JOIN sessions s ON s.session_id = b.session_id JOIN projects p ON p.project_id = b.project_id
+      WHERE s.provider_session_id = ? AND s.provider = ? LIMIT 1`).get(providerSessionId, provider) as { project_path: string } | undefined;
+    const normalizedProjectPath = explicitProject?.project_path ?? normalizeProjectPathForProvider(provider, projectPath);
 
     // First, ensure the project path is recorded in the projects table,
     // since it's a foreign key in the sessions table.
@@ -256,34 +265,47 @@ export const sessionsDb = {
     const db = getConnection();
 
     const merge = db.transaction(() => {
-      const duplicate = db
-        .prepare(
-          `SELECT ${SESSION_ROW_COLUMNS} FROM sessions
-           WHERE (session_id = ? OR provider_session_id = ?)
-             AND session_id <> ?
-           LIMIT 1`
-        )
-        .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
-
-      if (duplicate) {
-        db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
-        db.prepare(
-          `UPDATE sessions SET
-             provider_session_id = ?,
-             jsonl_path = COALESCE(jsonl_path, ?),
-             custom_name = COALESCE(custom_name, ?),
-             updated_at = CURRENT_TIMESTAMP
-           WHERE session_id = ?`
-        ).run(providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId);
-        return;
+      const current = sessionsDb.getSessionById(sessionId);
+      if (!current) throw new Error('Cannot bind a provider conversation to a missing app session');
+      const changing = Boolean(current.provider_session_id && current.provider_session_id !== providerSessionId);
+      const duplicate = db.prepare(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions
+        WHERE provider = ? AND (session_id = ? OR provider_session_id = ?) AND session_id <> ? LIMIT 1`)
+        .get(current.provider, providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
+      // Only an indexer-created row is safe to absorb automatically. Another
+      // app session is an ownership conflict, not a duplicate to delete.
+      if (duplicate && duplicate.session_id !== providerSessionId) {
+        throw new Error('Provider conversation already belongs to another app session');
       }
-
-      db.prepare(
-        `UPDATE sessions SET
-           provider_session_id = ?,
-           updated_at = CURRENT_TIMESTAMP
-         WHERE session_id = ?`
-      ).run(providerSessionId, sessionId);
+      if (duplicate) {
+        const draftConflict = db.prepare(`SELECT 1 FROM session_drafts a JOIN session_drafts b ON a.user_id = b.user_id
+          WHERE a.draft_scope = ? AND b.draft_scope = ? AND
+          ((a.draft_text <> '' AND b.draft_text <> '' AND a.draft_text <> b.draft_text)
+          OR (a.queued_message IS NOT NULL AND b.queued_message IS NOT NULL AND a.queued_message <> b.queued_message)) LIMIT 1`)
+          .get(sessionId, duplicate.session_id);
+        if (draftConflict) throw new Error('Both session entries contain unsent messages; preserve them before merging');
+        db.prepare(`INSERT INTO session_drafts (user_id, draft_scope, draft_text, queued_message, updated_at)
+          SELECT user_id, ?, draft_text, queued_message, updated_at FROM session_drafts WHERE draft_scope = ?
+          ON CONFLICT(user_id, draft_scope) DO UPDATE SET
+            draft_text = CASE WHEN session_drafts.draft_text = '' THEN excluded.draft_text ELSE session_drafts.draft_text END,
+            queued_message = COALESCE(session_drafts.queued_message, excluded.queued_message),
+            updated_at = MAX(session_drafts.updated_at, excluded.updated_at)`).run(sessionId, duplicate.session_id);
+        db.prepare('DELETE FROM session_drafts WHERE draft_scope = ?').run(duplicate.session_id);
+        db.prepare('UPDATE scheduled_messages SET session_id = ? WHERE session_id = ?').run(sessionId, duplicate.session_id);
+        db.prepare('UPDATE sessions SET forked_from_session_id = ? WHERE forked_from_session_id = ?').run(sessionId, duplicate.session_id);
+        db.prepare('UPDATE superseded_provider_sessions SET session_id = ? WHERE session_id = ?').run(sessionId, duplicate.session_id);
+        db.prepare(`INSERT OR IGNORE INTO session_project_bindings (session_id, project_id)
+          SELECT ?, project_id FROM session_project_bindings WHERE session_id = ?`).run(sessionId, duplicate.session_id);
+        db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
+      }
+      if (changing) sessionsDb.markProviderSessionSuperseded({
+        providerSessionId: current.provider_session_id!, provider: current.provider,
+        sessionId, jsonlPath: current.jsonl_path,
+      });
+      // Never keep the old transcript under a new id. If the watcher has not
+      // seen the new file yet, leave it unset until its next index event.
+      db.prepare(`UPDATE sessions SET provider_session_id = ?, jsonl_path = ?,
+        custom_name = COALESCE(custom_name, ?), updated_at = CURRENT_TIMESTAMP WHERE session_id = ?`)
+        .run(providerSessionId, duplicate?.jsonl_path ?? (changing ? null : current.jsonl_path), duplicate?.custom_name ?? null, sessionId);
     });
 
     merge();
@@ -292,11 +314,9 @@ export const sessionsDb = {
   /**
    * Moves one session onto a different provider session and transcript.
    *
-   * Only editing a message on a provider that has to branch to rewind (Codex)
-   * does this — an ordinary run keeps the same provider session for its whole
-   * life. `assignProviderSessionId` cannot be used for it: that one keeps the
-   * existing `jsonl_path` on purpose, so a session repointed with it would
-   * claim the new thread while still reading the old transcript.
+   * Used when editing a message on a provider that branches to rewind (Codex).
+   * Unlike a runtime announcement handled by `assignProviderSessionId`, this
+   * edit flow already knows the new transcript path before indexing sees it.
    *
    * The watcher may already have indexed the new transcript under its own id.
    * That row is the same conversation this one is about to become, so it is

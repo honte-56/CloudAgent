@@ -1,3 +1,4 @@
+import { getGlobalImageAssetsDir, normalizeAttachmentDescriptors, type ChatAttachmentDescriptor } from '@/shared/image-attachments.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import {
@@ -16,6 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
+import spawn from 'cross-spawn';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import { parseFrontMatter } from '@/shared/frontmatter.js';
@@ -23,6 +25,7 @@ import type {
   AnyRecord,
   ApiSuccessShape,
   AppErrorOptions,
+  CliVersionProbe,
   NormalizedMessage,
   ProviderCurrentActiveModel,
   ProviderModelsDefinition,
@@ -481,6 +484,32 @@ export function generateMessageId(prefix = 'msg'): string {
   return `${prefix}_${randomUUID()}`;
 }
 
+//----------------- RUNTIME CONTEXT DISPLAY ------------
+
+/** Legacy prompt text retained so old transcripts can be displayed without injected context. */
+export const LEGACY_GITHUB_AUTH_INSTRUCTIONS = 'This project has GitHub authentication configured for git over HTTPS and gh. Use git and gh directly; do not log in, read, print, or copy credentials. GitHub SSH remotes are mapped to HTTPS for this run. Commit and push only as requested by the user. Git author identity comes from the existing Git configuration.';
+
+/** Removes only a leading CloudCLI runtime-context envelope or its exact legacy
+ * GitHub paragraph. Quoted/embedded instructions and the user's remaining text
+ * are preserved. The caller marks cleaned rows to avoid stripping twice. */
+export function stripRuntimeInstructions(text: string): string {
+  const tagged = /^<cloudcli_runtime_context>\r?\n[\s\S]*?\r?\n<\/cloudcli_runtime_context>\r?\n\r?\n/.exec(text);
+  if (tagged) return text.slice(tagged[0].length);
+  for (const separator of ['\n\n', '\r\n\r\n']) {
+    const prefix = LEGACY_GITHUB_AUTH_INSTRUCTIONS + separator;
+    if (text.startsWith(prefix)) return text.slice(prefix.length);
+  }
+  return text;
+}
+
+/** Providers wraps server-generated context separately from the user's text.
+ * No credentials belong in this envelope; only non-secret usage instructions. */
+export function prependRuntimeInstructions(instructions: string, command: string): string {
+  return `<cloudcli_runtime_context>\n${instructions}\n</cloudcli_runtime_context>\n\n${command}`;
+}
+
+// ---------------------------
+
 /**
  * Creates a normalized provider message and fills the shared envelope fields.
  *
@@ -491,6 +520,9 @@ export function generateMessageId(prefix = 'msg'): string {
 export function createNormalizedMessage(fields: NormalizedMessageInput): NormalizedMessage {
   return {
     ...fields,
+    ...(fields.kind === 'text' && fields.role === 'user' && typeof fields.content === 'string'
+      ? { content: fields.runtimeContextStripped ? fields.content : stripRuntimeInstructions(fields.content), runtimeContextStripped: true }
+      : {}),
     id: fields.id || generateMessageId(fields.kind),
     sessionId: fields.sessionId || '',
     timestamp: fields.timestamp || new Date().toISOString(),
@@ -1091,6 +1123,78 @@ export function unwrapJsonStringLiteral(value: string): string {
 }
 
 // ---------------------------
+//----------------- JSONC UTILITIES ------------
+/**
+ * Removes JSONC comments (`//` line and `/*` block comments) without touching comment-like
+ * text inside string literals, so the result can go to `JSON.parse` once
+ * trailing commas are gone too (`stripTrailingCommas`).
+ *
+ * Used by the OpenCode provider, whose config files and inline
+ * `OPENCODE_CONFIG_CONTENT` are JSONC: its MCP config reader and its runtime.
+ */
+export function stripJsonComments(content: string): string {
+  let output = '';
+  let inString = false;
+  let quote = '';
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        inString = false;
+        quote = '';
+      }
+      continue;
+    }
+
+    if (char === '"' || char === '\'') {
+      inString = true;
+      quote = char;
+      output += char;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      while (index < content.length && content[index] !== '\n') {
+        index += 1;
+      }
+      output += '\n';
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      index += 2;
+      while (index < content.length && !(content[index] === '*' && content[index + 1] === '/')) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
+/**
+ * Removes the trailing commas JSONC allows before a closing `}` or `]`. Run it
+ * after `stripJsonComments`; like that helper it is used by the OpenCode
+ * provider's MCP config reader and runtime.
+ */
+export function stripTrailingCommas(content: string): string {
+  return content.replace(/,\s*([}\]])/g, '$1');
+}
+
+// ---------------------------
 //----------------- SAFE DIRECTORY NAME UTILITIES ------------
 /**
  * Validates that a user or provider supplied identifier can safely be treated
@@ -1212,7 +1316,15 @@ export async function buildLookupMap(
         continue;
       }
 
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        // A row can be half-written while the CLI is streaming into the file.
+        // Skip it rather than abandoning every later entry in the file.
+        continue;
+      }
+
       const key = parsed[keyField];
       const value = parsed[valueField];
 
@@ -1238,36 +1350,66 @@ export async function extractFirstValidJsonlData<T>(
   filePath: string,
   extractor: (parsedJson: unknown) => T | null | undefined
 ): Promise<T | null> {
-  try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  const fileStream = fs.createReadStream(filePath);
+  const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
+  try {
     for await (const line of lineReader) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
 
-      const parsed = JSON.parse(trimmed);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // A row can be half-written while the CLI is streaming into the file.
+        // Skip it rather than giving up before a later valid row.
+        continue;
+      }
+
       const extracted = extractor(parsed);
       if (extracted) {
-        lineReader.close();
-        fileStream.close();
         return extracted;
       }
     }
   } catch {
     // Ignore malformed or missing artifacts so full scans keep progressing.
+  } finally {
+    // Close on every exit (match, no match, or stream error) so a malformed
+    // artifact cannot leak the file descriptor across repeated watcher scans.
+    lineReader.close();
+    fileStream.close();
   }
 
   return null;
 }
 
 // ---------------------------
+//----------------- CLAUDE TRANSCRIPT ROW UTILITIES ------------
+/**
+ * True for a Claude session JSONL row that holds a `message` without being a
+ * conversation turn.
+ *
+ * Only `user` and `assistant` rows are turns. The Claude CLI also logs the
+ * requests it sends to the API as `api-request-blob` rows, and each one holds a
+ * copy of a prompt, tool call or system block that is already recorded as its
+ * own turn. Those copies have no timestamp. A reader that recognizes a turn by
+ * `message.role` alone shows each copy a second time, stamped with the time the
+ * transcript was read. Use this check to skip such rows before reading
+ * `message`. A row with no `message` returns false, so callers keep their
+ * other records, such as `queue-operation`, `system` and `last-prompt`.
+ */
+export function isClaudeNonTurnMessageRow(row: AnyRecord): boolean {
+  return row.message != null && row.type !== 'user' && row.type !== 'assistant';
+}
+
+// ---------------------------
 //----------------- CLI PROMPT ARGUMENT UTILITIES ------------
 /**
  * Makes a prompt safe to pass as one CLI argument to `.cmd`-shimmed tools on
- * Windows (cursor-agent and opencode installed via npm-style shims).
+ * Windows (cursor-agent installed via an npm-style shim).
  *
  * cmd.exe cannot carry newlines inside an argument: everything after the
  * first newline is silently dropped before the target CLI ever sees it, which
@@ -1275,7 +1417,7 @@ export async function extractFirstValidJsonlData<T>(
  * Collapsing newline runs to single spaces loses formatting but never loses
  * content, so runtimes should call this on win32 right before spawning.
  *
- * Used by the cursor and opencode spawn runtimes.
+ * Used by the cursor spawn runtime.
  */
 export function flattenPromptForWindowsShell(prompt: string): string {
   if (process.platform !== 'win32' || typeof prompt !== 'string') {
@@ -1350,6 +1492,57 @@ export const terminalTextStyles = {
 };
 
 // ---------------------------
+//----------------- CLI VERSION PROBE UTILITIES ------------
+/**
+ * Pulls the version number out of what a CLI prints for `--version`.
+ *
+ * Each provider CLI wraps it differently: `2.1.295 (Claude Code)`,
+ * `codex-cli 0.156.1`, a bare `1.18.25` from OpenCode, and the date-based
+ * `2026.07.20-8cc9c0b` from cursor-agent. This returns the first
+ * `major.minor.patch` token with any `-prerelease` or `+build` suffix, or null
+ * when the text has none.
+ */
+function parseCliVersion(output: string): string | null {
+  const match = stripAnsiSequences(output).match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]*)?/);
+  return match ? match[0] : null;
+}
+
+/**
+ * Runs `<command> --version` and reports whether the CLI is there and which
+ * version it is.
+ *
+ * cross-spawn's sync form does not throw for a command it cannot start; it
+ * returns `{ error }` (ENOENT, EACCES, ...). Checks that only caught
+ * exceptions therefore reported a missing CLI as installed. Any such error now
+ * means "not installed", except ETIMEDOUT: that `--version` did start and was
+ * only slow, so the CLI counts as installed with an unknown version.
+ *
+ * Synchronous on purpose: provider status checks already ran `--version` this
+ * way, and the 5 s timeout bounds the wait. Used by every provider's auth
+ * status (`installed` and `installedVersion`) and by the providers module's
+ * CLI update service (the version before and after an update).
+ */
+export function probeCliVersion(command: string, args: string[] = ['--version']): CliVersionProbe {
+  const result = spawn.sync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 5000,
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    const timedOut = (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    return { installed: timedOut, exitCode: null, version: null };
+  }
+
+  return {
+    installed: true,
+    exitCode: result.status,
+    version: result.status === 0 ? parseCliVersion(String(result.stdout ?? '')) : null,
+  };
+}
+
+// ---------------------------
 //----------------- RUNTIME PATH RESOLUTION UTILITIES ------------
 /**
  * Resolves the directory containing an ES module from `import.meta.url`.
@@ -1386,4 +1579,39 @@ export function findApplicationRoot(startDirectory: string): string {
   return path.basename(parentDirectory) === 'dist-server'
     ? path.dirname(parentDirectory)
     : parentDirectory;
+}
+
+//----------------- CHAT ATTACHMENT VALIDATION ------------
+/**
+ * Trust boundary for client-supplied image attachments: chat.send options come
+ * straight from the browser, and the provider runtimes read the referenced
+ * files off disk (Claude base64-encodes them into the prompt). Only images
+ * that live directly inside the global upload store (`~/.cloudcli/assets`,
+ * where POST /api/assets/images puts them) are allowed through — anything
+ * else (absolute paths elsewhere, traversal, subdirectories) is dropped.
+ *
+ * Used by WebSocket sends and provider live input. `assetsRootOverride` is for tests.
+ */
+export function filterAttachmentsToUploadStore(
+  attachments: unknown,
+  assetsRootOverride?: string,
+): ChatAttachmentDescriptor[] {
+  const assetsRoot = path.resolve(assetsRootOverride ?? getGlobalImageAssetsDir());
+
+  return normalizeAttachmentDescriptors(attachments).filter((descriptor) => {
+    // Relative paths are anchored in the store; absolute ones must already be in it.
+    const resolved = path.resolve(assetsRoot, descriptor.path);
+    const relative = path.relative(assetsRoot, resolved);
+    const isDirectChild =
+      relative.length > 0 &&
+      !relative.startsWith('..') &&
+      !path.isAbsolute(relative) &&
+      !relative.includes(path.sep) &&
+      !relative.includes('/');
+
+    if (!isDirectChild) {
+      console.warn(`[Chat] Dropping attachment outside the upload store: ${descriptor.path}`);
+    }
+    return isDirectChild;
+  });
 }

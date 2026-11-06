@@ -7,29 +7,23 @@ import {
   parseCodexRateLimits,
 } from '@/modules/providers/services/provider-plan-usage.service.js';
 
+import type { SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk';
+import { AppError } from '@/shared/index.js';
+
 const NOW = Date.parse('2026-10-30T00:00:00.000Z');
 
-function claudeCredentials(overrides: Record<string, unknown> = {}) {
-  return JSON.stringify({
-    claudeAiOauth: {
-      accessToken: 'secret-token',
-      expiresAt: NOW + 3_600_000,
-      subscriptionType: 'max',
-      ...overrides,
-    },
-  });
-}
-
-test('parseClaudeUsageBody keeps known windows in order and clamps percentages', () => {
+test('CLI windows use percentages and ISO timestamps, ignoring invalid and expired fields', () => {
   const windows = parseClaudeUsageBody({
-    seven_day: { utilization: 120, resets_at: '2026-11-02T00:00:00Z' },
-    five_hour: { utilization: 41.5, resets_at: '2026-10-30T03:00:00Z' },
-    seven_day_opus: null,
+    seven_day: { utilization: 120, resets_at: '2026-10-31T00:00:00Z' },
+    five_hour: { utilization: 41.5, resets_at: '2026-10-30T01:00:00Z' },
     unrelated: { utilization: 5 },
-  });
-
-  assert.deepEqual(windows.map((w) => [w.id, w.usedPercent]), [['five_hour', 41.5], ['weekly', 100]]);
-  assert.equal(windows[0].resetsAt, '2026-10-30T03:00:00.000Z');
+  }, NOW);
+  assert.deepEqual(windows.map(w => [w.id, w.usedPercent]), [['five_hour', 41.5], ['weekly', 100]]);
+  assert.equal(windows[0].resetsAt, '2026-10-30T01:00:00.000Z');
+  for (const entry of [null, {}, { utilization: null }, { utilization: '20', resets_at: '2026-10-30T00:00:01Z' },
+    { utilization: 20, resets_at: new Date(NOW).toISOString() }, { utilization: 20, resets_at: 1e99 }]) {
+    assert.deepEqual(parseClaudeUsageBody({ five_hour: entry }, NOW), []);
+  }
 });
 
 test('parseCodexRateLimits reports an already-reset window as unused', () => {
@@ -46,61 +40,96 @@ test('parseCodexRateLimits reports an already-reset window as unused', () => {
   assert.deepEqual(result.credits, { balance: '12.5', unlimited: false });
 });
 
-test('Claude usage is fetched with the stored token, cached, and never echoes the token', async () => {
+const usage = (used = 20) => ({
+  subscription_type: 'pro', rate_limits_available: true,
+  rate_limits: { five_hour: { utilization: used, resets_at: '2026-10-30T01:00:00Z' } },
+}) as SDKControlGetUsageResponse;
+
+test('Claude caches completed queries for five minutes and coalesces concurrent misses', async () => {
+  let resolve!: (result: SDKControlGetUsageResponse) => void;
   let calls = 0;
-  const service = createProviderPlanUsageService({
-    now: () => NOW,
-    getHomeDirectory: () => '/home/test',
-    readTextFile: async () => claudeCredentials(),
-    fetchJson: async (_url, init) => {
-      calls += 1;
-      assert.equal(init.headers.Authorization, 'Bearer secret-token');
-      return { status: 200, body: { five_hour: { utilization: 20, resets_at: '2026-10-30T03:00:00Z' } } };
-    },
-  });
-
-  const first = await service.getPlanUsage('claude');
-  await service.getPlanUsage('claude');
-
+  let now = NOW;
+  const service = createProviderPlanUsageService({ now: () => now, queryClaudeUsage: () => {
+    calls++;
+    return new Promise(done => { resolve = done; });
+  } });
+  const first = service.getPlanUsage('claude');
+  const second = service.getPlanUsage('claude');
   assert.equal(calls, 1);
-  assert.equal(first.status, 'ok');
-  assert.equal(first.planName, 'Max');
-  assert.equal(JSON.stringify(first).includes('secret-token'), false);
+  now += 2_000;
+  resolve(usage());
+  const result = await first;
+  assert.deepEqual(result, await second);
+  assert.equal(result.source, 'cli');
+  assert.equal(result.status, 'ok');
+  assert.equal(result.planName, 'Pro');
+  assert.equal(result.fetchedAt, new Date(now).toISOString());
+  assert.equal(result.windows[0].usedPercent, 20);
+  now += 299_999;
+  assert.deepEqual(await service.getPlanUsage('claude'), result);
+  assert.equal(calls, 1);
+  now += 1;
+  const refresh = service.getPlanUsage('claude');
+  const concurrentRefresh = service.getPlanUsage('claude');
+  assert.equal(calls, 2);
+  resolve(usage(25));
+  const refreshed = await refresh;
+  assert.equal(refreshed.windows[0].usedPercent, 25);
+  assert.equal(refreshed.fetchedAt, new Date(now).toISOString());
+  assert.deepEqual(await concurrentRefresh, refreshed);
 });
 
-test('Claude usage reports an expired token without calling the network', async () => {
-  const service = createProviderPlanUsageService({
-    now: () => NOW,
-    readTextFile: async () => claudeCredentials({ expiresAt: NOW - 1 }),
-    fetchJson: async () => {
-      throw new Error('must not be called');
-    },
-  });
-
-  assert.equal((await service.getPlanUsage('claude')).status, 'token-expired');
+test('manual refresh bypasses fresh cache, shares in-flight work and restarts cache lifetime', async () => {
+  let now = NOW;
+  let calls = 0;
+  let resolve!: (result: SDKControlGetUsageResponse) => void;
+  const service = createProviderPlanUsageService({ now: () => now, queryClaudeUsage: () => {
+    calls++;
+    return new Promise(done => { resolve = done; });
+  } });
+  const initial = service.getPlanUsage('claude');
+  resolve(usage());
+  await initial;
+  now += 60_000;
+  const manual = service.getPlanUsage('claude', { forceRefresh: true });
+  const duplicate = service.getPlanUsage('claude', { forceRefresh: true });
+  const reopened = service.getPlanUsage('claude');
+  assert.equal(calls, 2);
+  resolve(usage(30));
+  const fresh = await manual;
+  assert.equal(fresh.windows[0].usedPercent, 30);
+  assert.deepEqual(await duplicate, fresh);
+  assert.deepEqual(await reopened, fresh);
+  now += 299_999;
+  assert.deepEqual(await service.getPlanUsage('claude'), fresh);
+  assert.equal(calls, 2);
 });
 
-test('Claude usage reports unauthenticated when credentials are missing', async () => {
-  const service = createProviderPlanUsageService({
-    readTextFile: async () => {
-      throw new Error('ENOENT');
-    },
-  });
-
-  assert.equal((await service.getPlanUsage('claude')).status, 'unauthenticated');
+test('unavailable CLI limits are explicit, never fabricated zero usage', async () => {
+  for (const response of [{ ...usage(), rate_limits_available: false }, { ...usage(), rate_limits: {} }]) {
+    const service = createProviderPlanUsageService({ now: () => NOW, queryClaudeUsage: async () => response as SDKControlGetUsageResponse });
+    const result = await service.getPlanUsage('claude');
+    assert.equal(result.status, 'unsupported');
+    assert.deepEqual(result.windows, []);
+  }
 });
 
-test('Claude usage maps a rejected token to token-expired', async () => {
-  const service = createProviderPlanUsageService({
-    now: () => NOW,
-    readTextFile: async () => claudeCredentials(),
-    fetchJson: async () => ({ status: 401, body: null }),
-  });
-
-  assert.equal((await service.getPlanUsage('claude')).status, 'token-expired');
+test('CLI failure and timeout are sanitized and allow a later retry', async () => {
+  for (const error of [new Error('secret stderr'), new AppError('timeout', { code: 'CLAUDE_USAGE_TIMEOUT', statusCode: 504 })]) {
+    let fail = true;
+    const service = createProviderPlanUsageService({ now: () => NOW, queryClaudeUsage: async () => {
+      if (fail) throw error;
+      return usage();
+    } });
+    const result = await service.getPlanUsage('claude');
+    assert.equal(result.status, error instanceof AppError ? 'timeout' : 'error');
+    assert.equal(JSON.stringify(result).includes('secret'), false);
+    fail = false;
+    assert.equal((await service.getPlanUsage('claude')).status, 'ok');
+  }
 });
 
-test('Codex usage reads the newest rate_limits event from the newest session file', async () => {
+test('a failed live Codex query preserves the original log timestamp and identifies its fallback', async () => {
   const event = (used: number) => JSON.stringify({
     timestamp: '2026-10-29T10:00:00.000Z',
     type: 'event_msg',
@@ -117,6 +146,7 @@ test('Codex usage reads the newest rate_limits event from the newest session fil
 
   const service = createProviderPlanUsageService({
     now: () => NOW,
+    queryCodexUsage: async () => { throw new Error('offline'); },
     getHomeDirectory: () => '/home/test',
     readDirectory: async (directory) => (
       directory.endsWith('sessions') ? [dirent('old.jsonl', false), dirent('new.jsonl', false)] : []
@@ -132,10 +162,47 @@ test('Codex usage reads the newest rate_limits event from the newest session fil
   assert.equal(result.status, 'ok');
   assert.equal(result.windows[0].usedPercent, 55);
   assert.equal(result.source, 'session-log');
+  assert.equal(result.fetchedAt, '2026-10-29T10:00:00.000Z');
+  assert.match(result.message!, /Live quota query failed/);
 });
 
 test('unknown providers are rejected and cursor is unsupported', async () => {
   const service = createProviderPlanUsageService();
   assert.equal((await service.getPlanUsage('cursor')).status, 'unsupported');
   await assert.rejects(() => service.getPlanUsage('nope'));
+});
+
+
+test('Codex manual refresh fetches live limits and timestamps completion, with five-minute cache and coalescing', async () => {
+  let now = NOW;
+  let calls = 0;
+  let resolve!: (result: Record<string, unknown>) => void;
+  const service = createProviderPlanUsageService({ now: () => now, queryCodexUsage: () => {
+    calls++; return new Promise(done => { resolve = done; });
+  } });
+  const limits = { plan_type: 'pro', primary: { used_percent: 67, window_minutes: 10080, resets_at: NOW / 1000 + 86400 } };
+  const initial = service.getPlanUsage('codex');
+  resolve(limits);
+  const first = await initial;
+  assert.equal(first.source, 'cli');
+  assert.equal(first.fetchedAt, new Date(NOW).toISOString());
+  now += 60000;
+  assert.deepEqual(await service.getPlanUsage('codex'), first);
+  assert.equal(calls, 1);
+  const manual = service.getPlanUsage('codex', { forceRefresh: true });
+  const concurrent = service.getPlanUsage('codex', { forceRefresh: true });
+  assert.equal(calls, 2);
+  now += 1000;
+  resolve(limits);
+  const updated = await manual;
+  assert.deepEqual(await concurrent, updated);
+  assert.equal(updated.fetchedAt, new Date(now).toISOString());
+  assert.notEqual(updated.fetchedAt, first.fetchedAt);
+  now += 299999;
+  assert.deepEqual(await service.getPlanUsage('codex'), updated);
+  now++;
+  const expired = service.getPlanUsage('codex');
+  assert.equal(calls, 3);
+  resolve(limits);
+  await expired;
 });

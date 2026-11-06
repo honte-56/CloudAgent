@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { TaskProgressPanel } from '@/modules/chat/transcript/TaskProgressPanel';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -8,7 +9,8 @@ import { useWebSocket } from '@/shared/context/WebSocketContext';
 import PermissionContext from '@/modules/chat/context/PermissionContext';
 import { MarkdownWorkspaceContext } from '@/modules/chat/context/MarkdownWorkspaceContext';
 import { TranscriptSessionContext } from '@/modules/chat/context/TranscriptSessionContext';
-import { api } from '@/shared/api';
+import { api, readApiErrorMessage } from '@/shared/api';
+import { SessionExecutionNotice } from '@/shared/ui/SessionExecutionNotice';
 import type {
   ChatMessage,
   Project,
@@ -82,9 +84,10 @@ function ChatInterface({
     getSessionActivity,
   } = useSessionProtectionActions();
 
+  // The side panel belongs to its parent conversation and leaves the draft and scroll position mounted.
+  const [openTask, setOpenTask] = useState<{ sessionId: string; toolUseId: string; title: string } | null>(null);
+  const closeTask = useCallback(() => setOpenTask(null), []);
   const sessionStore = useSessionStore();
-  const streamTimerRef = useRef<number | null>(null);
-  const accumulatedStreamRef = useRef('');
   // When each session's `chat.subscribe` was last sent; idle acks older than
   // a later local request are discarded as stale.
   const statusCheckSentAtRef = useRef(new Map<string, number>());
@@ -93,13 +96,7 @@ function ChatInterface({
   // server replays only the events this client actually missed.
   const lastSeqRef = useRef(new Map<string, number>());
 
-  const resetStreamingState = useCallback(() => {
-    if (streamTimerRef.current) {
-      clearTimeout(streamTimerRef.current);
-      streamTimerRef.current = null;
-    }
-    accumulatedStreamRef.current = '';
-  }, []);
+
 
   const {
     provider,
@@ -142,10 +139,10 @@ function ChatInterface({
     hasMoreMessages,
     totalMessages,
     isUserScrolledUp,
+    hasUnreadUpdates,
     setIsUserScrolledUp,
     tokenBudget,
     setTokenBudget,
-    visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
     revealMessage,
@@ -157,6 +154,7 @@ function ChatInterface({
     showLoadAllOverlay,
     createDiff,
     scrollContainerRef,
+    historyStartRef,
     scrollToBottom,
     scrollToBottomAndReset,
     handleScroll,
@@ -171,11 +169,16 @@ function ChatInterface({
     newSessionTrigger,
     processingSessions,
     onSessionIdle,
-    resetStreamingState,
     statusCheckSentAtRef,
     lastSeqRef,
     sessionStore,
   });
+
+  const openTaskProgress = useCallback((toolUseId: string, title: string) => {
+    const sessionId = selectedSession?.id || currentSessionId;
+    if (sessionId) setOpenTask({ sessionId, toolUseId, title });
+  }, [selectedSession?.id, currentSessionId]);
+  const taskForCurrentSession = openTask?.sessionId === (selectedSession?.id || currentSessionId) ? openTask : null;
 
   // Brand-new conversation: the composer allocated a stable session id via
   // the session gateway before the first send. Record it locally and put it
@@ -207,7 +210,9 @@ function ChatInterface({
     renderInputWithMentions,
     selectFile,
     attachedFiles,
-    setAttachedFiles,
+    attachmentUploadStates,
+    retryAttachmentUpload,
+    removeAttachment,
     fileErrors,
     getRootProps,
     getInputProps,
@@ -219,6 +224,9 @@ function ChatInterface({
     isSteering,
     isSending,
     queuedDraft,
+    nativeQueuedMessages,
+    nativeQueueBusyId,
+    changeNativeQueuedMessage,
     editQueuedDraft,
     deleteQueuedDraft,
     handleVoiceTranscript,
@@ -292,8 +300,6 @@ function ChatInterface({
     setTokenBudget,
     pendingPermissionRequests,
     setPendingPermissionRequests,
-    streamTimerRef,
-    accumulatedStreamRef,
     lastSeqRef,
     statusCheckSentAtRef,
     onSessionProcessing,
@@ -346,36 +352,32 @@ function ChatInterface({
     };
   }, [canAbortSession, handleAbortSession]);
 
-  useEffect(() => {
-    return () => {
-      resetStreamingState();
-    };
-  }, [resetStreamingState]);
 
   /**
    * Branches the conversation into a new session that ends at this message,
    * then opens it. The session being viewed is left exactly as it was.
    */
+  const forkInFlightRef = useRef(false);
   const handleForkFromMessage = useCallback(async (message: ChatMessage) => {
-    const anchorId = message.transcriptAnchorId;
+    const anchorId = message.forkAnchorId;
     const sourceSessionId = selectedSession?.id;
-    if (!anchorId || !sourceSessionId) return;
-
+    if (!anchorId || !sourceSessionId || forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
     try {
       const response = await api.forkSession(sourceSessionId, { upToAnchorId: anchorId });
       const payload = await response.json();
       const forkedSessionId = payload?.data?.sessionId;
       if (!response.ok || typeof forkedSessionId !== 'string') {
-        throw new Error(payload?.message || `HTTP ${response.status}`);
+        throw new Error(readApiErrorMessage(payload) || `HTTP ${response.status}`);
       }
       onNavigateToSession?.(forkedSessionId);
     } catch (error) {
-      console.error('Error forking session:', error);
-    }
-  }, [onNavigateToSession, selectedSession?.id]);
+      addMessage({ type: 'error', content: `${t('message.forkFailed')} ${error instanceof Error ? error.message : String(error)}`, timestamp: new Date() });
+    } finally { forkInFlightRef.current = false; }
+  }, [onNavigateToSession, selectedSession?.id, addMessage, t]);
 
   const { scheduledMessages, schedule: scheduleMessage, cancel: cancelScheduledMessage } =
-    useScheduledMessages(currentSessionId || selectedSession?.id || null);
+    useScheduledMessages(currentSessionId || selectedSession?.id || null, subscribe);
 
   /**
    * Hands the composer's current text to the server to send later, and clears
@@ -458,7 +460,8 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="relative flex h-full min-h-0 min-w-0">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <MarkdownWorkspaceContext.Provider value={markdownWorkspaceValue}>
           <TranscriptSessionContext.Provider value={transcriptSessionValue}>
             <ChatMessagesPane
@@ -492,11 +495,12 @@ function ChatInterface({
               hasMoreMessages={hasMoreMessages}
               totalMessages={totalMessages}
               sessionMessagesCount={chatMessages.length}
-              visibleMessageCount={visibleMessageCount}
               visibleMessages={visibleMessages}
               loadEarlierMessages={loadEarlierMessages}
+              historyStartRef={historyStartRef}
               revealMessage={revealMessage}
               backgroundTasks={sessionActivity?.tasks}
+              onOpenTask={openTaskProgress}
               sendMessage={sendMessage}
               loadAllMessages={loadAllMessages}
               allMessagesLoaded={allMessagesLoaded}
@@ -527,14 +531,16 @@ function ChatInterface({
                 type="button"
                 onClick={scrollToBottomAndReset}
                 aria-label={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-                className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
+                className="pointer-events-auto flex h-8 min-w-8 items-center justify-center gap-1 px-2 rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
                 title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
               >
                 <ArrowDownIcon className="h-4 w-4" aria-hidden />
+                {hasUnreadUpdates && <span className="text-xs">{t('input.newMessages', { defaultValue: 'New messages' })}</span>}
               </button>
             </div>
           )}
 
+          <SessionExecutionNotice sessionId={currentSessionId || selectedSession?.id} target="chat" />
           <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
@@ -570,14 +576,15 @@ function ChatInterface({
           isSending={isSending}
           isDragActive={isDragActive}
           queuedDraft={queuedDraft}
+          nativeQueuedMessages={nativeQueuedMessages}
+          nativeQueueBusyId={nativeQueueBusyId}
+          onChangeNativeQueuedMessage={changeNativeQueuedMessage}
           onEditQueuedDraft={editQueuedDraft}
           onDeleteQueuedDraft={deleteQueuedDraft}
           attachedFiles={attachedFiles}
-          onRemoveAttachment={(index) =>
-            setAttachedFiles((previous) =>
-              previous.filter((_, currentIndex) => currentIndex !== index),
-            )
-          }
+          onRemoveAttachment={removeAttachment}
+          attachmentUploadStates={attachmentUploadStates}
+          onRetryAttachmentUpload={retryAttachmentUpload}
           fileErrors={fileErrors}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
@@ -612,6 +619,9 @@ function ChatInterface({
         </div>
       </div>
 
+      {taskForCurrentSession && <TaskProgressPanel key={`${taskForCurrentSession.sessionId}:${taskForCurrentSession.toolUseId}`}
+        {...taskForCurrentSession} selectedProject={selectedProject} createDiff={createDiff} onClose={closeTask} />}
+      </div>
       <CommandResultModal
         payload={commandModalPayload}
         onClose={closeCommandModal}

@@ -33,8 +33,8 @@ const renderHandlers = () => {
     setPendingPermissionRequests: (next) => {
       pending = typeof next === 'function' ? next(pending) : next;
     },
-    streamTimerRef: { current: null },
-    accumulatedStreamRef: { current: '' },
+
+
     lastSeqRef: { current: new Map() },
     statusCheckSentAtRef: { current: new Map() },
     requestLatestMessages: async () => {},
@@ -87,4 +87,35 @@ test('an unanswered request stays pending through a resolution for another id', 
   const pending = getPending();
   assert.equal(pending.length, 1);
   assert.equal(pending[0].requestId, 'req-open');
+});
+
+test('a prompt replayed after a refresh keeps the context its panel reads', () => {
+  const { dispatch, getPending } = renderHandlers();
+
+  // OpenCode's question and permission prompts depend on their context: the
+  // answer format of a question, and what "Always allow" covers.
+  dispatch({
+    kind: 'chat_subscribed',
+    sessionId: 'viewed-session',
+    isProcessing: true,
+    pendingPermissions: [
+      { requestId: 'que_1', toolName: 'AskUserQuestion', input: { questions: [] }, context: { answerFormat: 'label-lists' } },
+      { requestId: 'per_1', toolName: 'bash', input: {}, context: { patterns: ['git status'], always: ['git status *'] } },
+    ],
+  } as unknown as ServerEvent);
+  dispatch({
+    kind: 'permission_request',
+    requestId: 'per_2',
+    toolName: 'edit',
+    input: {},
+    context: { patterns: ['src/app.ts'], always: ['*'] },
+    sessionId: 'viewed-session',
+    seq: 1,
+  } as unknown as ServerEvent);
+
+  assert.deepEqual(getPending().map((request) => request.context), [
+    { answerFormat: 'label-lists' },
+    { patterns: ['git status'], always: ['git status *'] },
+    { patterns: ['src/app.ts'], always: ['*'] },
+  ]);
 });

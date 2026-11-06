@@ -139,7 +139,7 @@ export function useSessionProtection() {
 
       const next: SessionActivity = {
         statusText: null,
-        canInterrupt: false,
+        canInterrupt: true,
         startedAt: Math.min(...tasks.map((task) => task.startedAt)),
         background: true,
         tasks,
@@ -163,6 +163,9 @@ export function useSessionProtection() {
         if (!session.sessionId) {
           continue;
         }
+        const existing = incoming.get(session.sessionId);
+        // An external CLI fallback must not erase the owned background entry.
+        if (existing?.background && !session.background && session.canInterrupt === false) continue;
         incoming.set(session.sessionId, session);
       }
 

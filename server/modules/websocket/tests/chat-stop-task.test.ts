@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -43,6 +43,7 @@ async function withGateway(
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   const stops: StopCall[] = [];
@@ -103,6 +104,7 @@ test('a task the runtime is not tracking is refused with NO_SUCH_TASK', async ()
     assert.equal(socket.frames[0].kind, 'protocol_error');
     assert.equal(socket.frames[0].code, 'NO_SUCH_TASK');
     assert.equal(socket.frames[0].sessionId, SESSION_ID);
+    assert.equal(socket.frames[0].taskId, 'already-settled');
   });
 });
 
@@ -123,5 +125,23 @@ test('a stop for a session that does not exist is refused', async () => {
 
     assert.equal(stops.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'SESSION_NOT_FOUND');
+  });
+});
+
+
+test('chat.abort reaches the owned runtime after its foreground turn completed', async () => {
+  await withGateway('monitor', async ({ socket }) => {
+    const run = chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'claude', providerSessionId: null, connection: null, userId: 1 });
+    run!.writer.sendComplete({ exitCode: 0 });
+    let aborted = 0;
+    socket.removeAllListeners('message');
+    handleChatConnection(socket as never, { user: { id: 1 } } as never, { runtime: {
+      hasBackgroundWork: () => true,
+      abort: async () => { aborted++; return true; },
+    } as never });
+    socket.emit('message', JSON.stringify({ type: 'chat.abort', sessionId: SESSION_ID }));
+    await settle();
+    assert.equal(aborted, 1);
+    assert.ok(!socket.frames.some(frame => frame.code === 'NO_ACTIVE_RUN'));
   });
 });

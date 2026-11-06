@@ -10,6 +10,8 @@ type SubagentTimelineProps = {
   activity: SubagentActivity[];
   /** Total entries the agent recorded, which exceeds `activity` when a long run was truncated for transport. */
   activityCount?: number;
+  /** The dedicated live task panel already limits its server window and shows it all. */
+  showAll?: boolean;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   selectedProject?: Project | null;
@@ -44,7 +46,7 @@ const SubagentNote = memo(({ activity }: { activity: SubagentActivity }) => {
 SubagentNote.displayName = 'SubagentNote';
 
 /**
- * Rendered by SubagentPanel and WorkflowPanel for an agent's recorded
+ * Rendered by SubagentPanel, WorkflowPanel and TaskProgressPanel for an agent's recorded
  * timeline — tool calls through the same router the main thread uses, prose
  * and reasoning as notes — with a "show more" step for long runs and a note
  * for the entries the backend left out of a truncated one.
@@ -52,12 +54,12 @@ SubagentNote.displayName = 'SubagentNote';
  * Only mount it while its panel is open: a run of a hundred tools is a
  * hundred tool renderers.
  */
-export const SubagentTimeline = memo(({ activity, activityCount, onFileOpen, createDiff, selectedProject }: SubagentTimelineProps) => {
+export const SubagentTimeline = memo(({ activity, activityCount, onFileOpen, createDiff, selectedProject, showAll = false }: SubagentTimelineProps) => {
   const isExporting = useIsExportingTranscript();
   // Raised by the "show more" step so a long run can be inspected in full
   // without paying for it up front.
   const [renderLimit, setRenderLimit] = useState(INITIALLY_RENDERED_ACTIVITIES);
-  const effectiveRenderLimit = isExporting ? Number.POSITIVE_INFINITY : renderLimit;
+  const effectiveRenderLimit = isExporting || showAll ? Number.POSITIVE_INFINITY : renderLimit;
 
   // The backend truncates very long timelines for transport; say so rather
   // than implying the agent stopped where the list does.

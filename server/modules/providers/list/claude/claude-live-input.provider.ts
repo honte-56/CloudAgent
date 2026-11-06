@@ -23,9 +23,10 @@ export function createClaudeInputStream(initial: SDKUserMessage[], acknowledgeme
     stream,
     get open() { return !closed; },
     get pending() { return awaitingConsumption.size > 0; },
-    send(content: string): Promise<void> {
+    isPending(id: string) { return awaitingConsumption.has(id); },
+    send(content: SDKUserMessage['message']['content'], options: { id?: string; priority?: 'next' | 'later' } = {}): Promise<void> {
       if (closed) return Promise.reject(new Error('Claude is no longer accepting live input.'));
-      const uuid = randomUUID();
+      const uuid = (options.id ?? randomUUID()) as ReturnType<typeof randomUUID>;
       const receipt = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(uuid);
@@ -38,7 +39,7 @@ export function createClaudeInputStream(initial: SDKUserMessage[], acknowledgeme
       awaitingConsumption.add(uuid);
       queue.push({ type: 'user', uuid, message: { role: 'user', content }, parent_tool_use_id: null,
         // Deliver at the next safe boundary; never interrupt a running tool.
-        priority: 'next', timestamp: new Date().toISOString() });
+        priority: options.priority ?? 'next', timestamp: new Date().toISOString() });
       wake?.();
       wake = undefined;
       return receipt;

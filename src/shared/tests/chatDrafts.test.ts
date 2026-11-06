@@ -130,6 +130,8 @@ test('hydrate removes a mirrored queue after the server claims it', async () => 
   store.writeQueuedMessage('session-a', { content: 'server-owned queue' });
   assert.equal(store.readQueuedMessage('session-a')?.content, 'server-owned queue');
 
+  // The dispatcher can claim the queue only after its serialized save arrives.
+  await vi.advanceTimersByTimeAsync(0);
   serverDrafts = [];
   await store.hydrateChatDrafts();
 

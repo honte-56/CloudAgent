@@ -65,6 +65,8 @@ function ensureDatabaseDirectory(dbPath: string): void {
  * copy it to the new location as a one-time migration.
  */
 function migrateLegacyDatabase(targetPath: string): void {
+  // Fixture databases must never import data from a developer's installation.
+  if (process.env.NODE_ENV === 'test') return;
   const legacyPath = resolveLegacyDatabasePath();
 
   if (targetPath === legacyPath) return;

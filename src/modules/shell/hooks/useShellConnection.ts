@@ -121,6 +121,12 @@ export function useShellConnection({
         return;
       }
 
+      if (message.type === 'session_owned') {
+        terminalRef.current?.write('\r\n\x1b[33mThis conversation is already running in chat. Use the takeover action above to switch.\x1b[0m\r\n');
+        window.dispatchEvent(new Event('session-execution-changed'));
+        return;
+      }
+
       if (message.type === 'claude_theme') {
         const { colorScheme } = message;
         setClaudeLaunchColorScheme(colorScheme === 'light' || colorScheme === 'dark' ? colorScheme : null);

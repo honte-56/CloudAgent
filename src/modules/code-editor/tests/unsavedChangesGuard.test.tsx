@@ -233,7 +233,7 @@ test('a save still in flight when another file opens leaves that file clean', as
   });
   // Back to the plain save title: neither the old file's baseline nor its
   // "saved" tick was allowed to land on the file that is open now.
-  await waitFor(() => assert.ok(screen.getByTitle('actions.save')));
+  await waitFor(() => assert.ok(screen.getByTitle('Save')));
 
   assert.equal(isDirtyDotShown(), false);
   pressEscape();
@@ -299,7 +299,7 @@ test('a failed save of the previous file is not reported on the one open now', a
 
   assert.equal(screen.queryByText('disk full') !== null, false);
   // The open file can be saved straight away rather than waiting on the old write.
-  assert.equal(screen.getByTitle('actions.save').hasAttribute('disabled'), false);
+  assert.equal(screen.getByTitle('Save').hasAttribute('disabled'), false);
 });
 
 test('the header close button is guarded the same way', async () => {
@@ -308,7 +308,7 @@ test('the header close button is guarded the same way', async () => {
 
   typeInto(editor, 'hello edited');
   // No i18n instance is initialised here, so labels without a default render as their key.
-  fireEvent.click(screen.getByTitle('actions.close'));
+  fireEvent.click(screen.getByTitle('Close'));
 
   assert.equal(confirm.mock.calls.length, 1);
   assert.equal(onClose.mock.calls.length, 0);

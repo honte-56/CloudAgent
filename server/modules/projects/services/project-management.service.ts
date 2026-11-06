@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb } from '@/modules/database/index.js';
+import { validateProjectGithubCredential, rememberCloneGithubCredential } from '@/modules/github-auth/index.js';
+import { getConnection, projectsDb } from '@/modules/database/index.js';
 import type {
+  ProjectGithubCredentialSelection,
   CreateProjectPathResult,
   ProjectRepositoryRow,
   WorkspacePathValidationResult,
@@ -12,12 +14,13 @@ import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/
 type CreateProjectInput = {
   projectPath: string;
   customName?: string | null;
+  github?: ProjectGithubCredentialSelection;
 };
 
 type CreateProjectDependencies = {
   validatePath: (projectPath: string) => Promise<WorkspacePathValidationResult>;
   ensureWorkspaceDirectory: (projectPath: string) => Promise<void>;
-  persistProjectPath: (projectPath: string, customName: string | null) => CreateProjectPathResult;
+  persistProjectPath: (projectPath: string, customName: string | null, github?: ProjectGithubCredentialSelection) => CreateProjectPathResult;
   getProjectByPath: (projectPath: string) => ProjectRepositoryRow | null;
 };
 
@@ -53,8 +56,13 @@ const defaultDependencies: CreateProjectDependencies = {
       });
     }
   },
-  persistProjectPath: (projectPath: string, customName: string | null): CreateProjectPathResult =>
-    projectsDb.createProjectPath(projectPath, customName),
+  persistProjectPath: (projectPath, customName, github) => getConnection().transaction(() => {
+    const result = projectsDb.createProjectPath(projectPath, customName);
+    if (github && result.outcome !== 'active_conflict') {
+      rememberCloneGithubCredential(github.userId, projectPath, github.credentialId, github.inlineToken);
+    }
+    return result;
+  })(),
   getProjectByPath: (projectPath: string): ProjectRepositoryRow | null =>
     projectsDb.getProjectPath(projectPath),
 };
@@ -89,6 +97,7 @@ export async function createProject(
   input: CreateProjectInput,
   dependencies: CreateProjectDependencies = defaultDependencies,
 ): Promise<CreateProjectServiceResult> {
+  if (input.github) validateProjectGithubCredential(input.github.userId, input.github.credentialId);
   const normalizedPath = normalizeProjectPath(input.projectPath || '');
   if (!normalizedPath) {
     throw new AppError('path is required', {
@@ -110,7 +119,7 @@ export async function createProject(
   await dependencies.ensureWorkspaceDirectory(resolvedProjectPath);
 
   const normalizedCustomName = resolveDisplayName(input.customName ?? null, resolvedProjectPath);
-  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName);
+  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName, input.github);
 
   if (persistedProject.outcome === 'active_conflict') {
     throw new AppError('Project path already exists and is active', {

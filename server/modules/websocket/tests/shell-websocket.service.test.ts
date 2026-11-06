@@ -7,7 +7,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { WebSocket } from 'ws';
+import * as nativePty from 'node-pty';
 
+import { createSessionExecutionRegistry } from '@/modules/providers/services/session-execution.service.js';
 import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
 
 function createFakeSocket() {
@@ -22,10 +24,14 @@ function createFakeSocket() {
   return socket;
 }
 
+const ptyCleanups: Array<() => void> = [];
+test.afterEach(() => { ptyCleanups.splice(0).forEach(close => close()); });
+
 function createFakePty() {
   let dataListener: ((data: string) => void) | null = null;
   let exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
 
+  ptyCleanups.push(() => exitListener?.({ exitCode: 0 }));
   return {
     killed: false,
     onData(listener: (data: string) => void) {
@@ -53,6 +59,7 @@ function createFakePty() {
 test('a stale socket close cannot detach the socket that replaced it', () => {
   const pty = createFakePty();
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => null,
     spawnPty: () => pty as never,
   };
@@ -90,6 +97,7 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
   const pty = createFakePty();
   const socket = createFakeSocket();
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => null,
     spawnPty: () => pty as never,
   };
@@ -125,6 +133,7 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
 test('bypassPermissions launches claude with --dangerously-skip-permissions', () => {
   const spawnedCommands: string[] = [];
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => null,
     spawnPty: (_shell: string, args: string | string[]) => {
       spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
@@ -162,9 +171,81 @@ test('bypassPermissions launches claude with --dangerously-skip-permissions', ()
   assert.deepEqual(spawnedCommands, ['claude --dangerously-skip-permissions', 'claude']);
 });
 
+test('opening terminal cannot spawn over chat; explicit takeover waits for chat exit', async () => {
+  const execution = createSessionExecutionRegistry(() => 'native-owned');
+  let stops = 0;
+  const chat = execution.claim({ sessionId: 'chat-app', provider: 'claude', kind: 'chat', stop() { stops++; } });
+  const pty = createFakePty();
+  let launches = 0;
+  const dependencies = { execution, resolveProviderSessionId: () => 'native-owned', spawnPty: () => { launches++; return pty as never; } };
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  const init = { type: 'init', projectPath: process.cwd(), sessionId: 'chat-app', hasSession: true, provider: 'claude' };
+  socket.emit('message', JSON.stringify(init));
+  assert.equal(launches, 0);
+  assert.equal(stops, 0);
+  assert.equal(JSON.parse(socket.frames[0]).type, 'session_owned');
+  socket.emit('message', JSON.stringify({ ...init, takeoverOwnerId: chat.owner.id }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stops, 1);
+  assert.equal(launches, 0, 'stop request alone is not an exit');
+  chat.release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(launches, 1);
+  assert.equal(execution.get('chat-app')?.kind, 'terminal');
+  pty.emitExit();
+});
+
+test('terminal reconnect and native aliases share a single owner; stale sockets cannot send input', () => {
+  const execution = createSessionExecutionRegistry(() => 'same-native');
+  const pty = createFakePty();
+  let launches = 0;
+  let writes = 0;
+  pty.write = () => { writes++; };
+  const dependencies = { execution, resolveProviderSessionId: () => 'same-native', spawnPty: () => { launches++; return pty as never; } };
+  const first = createFakeSocket();
+  const next = createFakeSocket();
+  const init = { type: 'init', projectPath: process.cwd(), hasSession: true, provider: 'claude' };
+  handleShellConnection(first as never, dependencies);
+  first.emit('message', JSON.stringify({ ...init, sessionId: 'alias-first' }));
+  first.emit('close');
+  assert.throws(() => execution.claim({ sessionId: 'alias-next', provider: 'claude', kind: 'chat', stop() {} }));
+  handleShellConnection(next as never, dependencies);
+  next.emit('message', JSON.stringify({ ...init, sessionId: 'alias-next' }));
+  first.emit('message', JSON.stringify({ type: 'input', data: 'stale' }));
+  next.emit('message', JSON.stringify({ type: 'input', data: 'current' }));
+  assert.equal(launches, 1);
+  assert.equal(writes, 1);
+  pty.emitExit();
+  assert.equal(execution.get('alias-next'), null);
+});
+
+test('terminal restart waits for the old PTY exit before spawning its replacement', async () => {
+  const execution = createSessionExecutionRegistry(() => 'restart-native');
+  const children: ReturnType<typeof createFakePty>[] = [];
+  const dependencies = { execution, resolveProviderSessionId: () => 'restart-native', spawnPty: () => {
+    const pty = createFakePty(); children.push(pty); return pty as never;
+  } };
+  const socket = createFakeSocket();
+  handleShellConnection(socket as never, dependencies);
+  const init = { type: 'init', projectPath: process.cwd(), sessionId: 'restart-app', hasSession: true, provider: 'claude' };
+  socket.emit('message', JSON.stringify(init));
+  socket.emit('message', JSON.stringify({ ...init, forceRestart: true }));
+  assert.equal(children[0].killed, true);
+  assert.equal(children.length, 1);
+  children[0].emitExit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(children.length, 2);
+  const newOwner = execution.get('restart-app')?.id;
+  children[0].emitExit();
+  assert.equal(execution.get('restart-app')?.id, newOwner);
+  children[1].emitExit();
+});
+
 test('bypassPermissions carries through to resumed claude sessions', () => {
   const spawnedCommands: string[] = [];
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => 'resumed-session-id',
     spawnPty: (_shell: string, args: string | string[]) => {
       spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
@@ -190,7 +271,7 @@ test('bypassPermissions carries through to resumed claude sessions', () => {
   if (os.platform() !== 'win32') {
     assert.equal(
       spawnedCommands[0],
-      'claude --resume "resumed-session-id" --dangerously-skip-permissions || claude --dangerously-skip-permissions'
+      'exec claude --resume "resumed-session-id" --dangerously-skip-permissions'
     );
   }
 });
@@ -199,6 +280,7 @@ test('a missing project directory is reported as an error frame and starts no pt
   const socket = createFakeSocket();
   let spawnCount = 0;
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => null,
     spawnPty: () => {
       spawnCount += 1;
@@ -233,6 +315,7 @@ type SpawnCall = { shell: string; args: string[]; command: string; env: Record<s
 function spawnRecorder(resumeSessionId: string | null = null) {
   const calls: SpawnCall[] = [];
   const dependencies = {
+    execution: createSessionExecutionRegistry(() => null),
     resolveProviderSessionId: () => resumeSessionId,
     spawnPty: (shell: string, args: string | string[], options?: { env?: Record<string, string | undefined> }) => {
       calls.push({
@@ -267,6 +350,9 @@ function launch(
       ...init,
     })
   );
+  const launchFrames = socket.frames.length;
+  ptyCleanups.at(-1)?.();
+  socket.frames.length = launchFrames; // These assertions inspect launch output, not cleanup.
   return socket;
 }
 
@@ -343,7 +429,7 @@ test('a dark Shell tab launches claude exactly as before, whatever the user them
         [
           'claude',
           'claude --dangerously-skip-permissions',
-          'claude --resume "resumed-session-id" || claude',
+          'exec claude --resume "resumed-session-id"',
           'claude',
           'claude',
         ]
@@ -557,7 +643,7 @@ test('the light theme rides along with bypass and resume launches', () => {
     assert.equal(calls.length, 1);
     if (os.platform() !== 'win32') {
       const flags = ` --dangerously-skip-permissions${themeFlag('light')}`;
-      assert.equal(calls[0].command, `claude --resume "resumed-session-id"${flags} || claude${flags}`);
+      assert.equal(calls[0].command, `exec claude --resume "resumed-session-id"${flags}`);
     }
   });
 });
@@ -615,12 +701,12 @@ test('the settings file path is quoted for bash and for PowerShell', (t) => {
     assert.ok(settingsPath.includes("it's a \u2019quoted\u2019 home"), settingsPath);
     assert.deepEqual(calls.map((call) => [call.shell, ...call.args]), [
       ['bash', '-c', `claude${bashFlag}`],
-      ['bash', '-c', `claude --resume "resumed-session-id"${bashFlag} || claude${bashFlag}`],
+      ['bash', '-c', `exec claude --resume "resumed-session-id"${bashFlag}`],
       ['powershell.exe', '-Command', `claude${powerShellFlag}`],
       [
         'powershell.exe',
         '-Command',
-        `claude --resume "resumed-session-id"${powerShellFlag}; if ($LASTEXITCODE -ne 0) { claude${powerShellFlag} }`,
+        `claude --resume "resumed-session-id"${powerShellFlag}`,
       ],
     ]);
     // Spelled out once, so the escaping above is not only checked against itself.
@@ -745,4 +831,52 @@ test('other shells and initial commands only get the COLORFGBG hint', () => {
       ['0;15', '0;15', '0;15', '15;0']
     );
   });
+});
+
+
+test('real terminal takeover escalates an ignored stop and waits for OS exit', { timeout: 10000, skip: process.platform === 'win32' }, async () => {
+  const execution = createSessionExecutionRegistry(() => 'isolated-native');
+  const socket = createFakeSocket();
+  let child: nativePty.IPty | undefined;
+  let ready!: () => void;
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  let didExit = false;
+  handleShellConnection(socket as never, {
+    execution, resolveProviderSessionId: () => 'isolated-native',
+    spawnPty: () => {
+      child = nativePty.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000);"], { cwd: process.cwd(), env: { PATH: process.env.PATH } });
+      child.onData(text => { if (text.includes('ready')) ready(); });
+      child.onExit(() => { didExit = true; });
+      return child;
+    },
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), sessionId: 'isolated-terminal', hasSession: true, provider: 'claude' }));
+  try {
+    await started;
+    const owner = execution.get('isolated-terminal')!;
+    const stopping = execution.stop('isolated-terminal', owner.id);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(didExit, false);
+    assert.throws(() => execution.claim({ sessionId: 'isolated-terminal', provider: 'claude', kind: 'chat', stop() {} }));
+    await stopping;
+    assert.equal(didExit, true);
+    assert.equal(execution.get('isolated-terminal'), null);
+    assert.throws(() => process.kill(child!.pid, 0));
+  } finally { if (!didExit) child?.kill('SIGKILL'); }
+});
+
+test('terminal resume uses the stored directory rather than a stale browser path', async () => {
+  const socket = createFakeSocket();
+  const pty = createFakePty();
+  let launchedCwd: string | undefined;
+  handleShellConnection(socket as never, {
+    execution: createSessionExecutionRegistry(() => null),
+    resolveProviderSessionId: () => 'directory-native',
+    resolveSessionProjectPath: () => process.cwd(),
+    spawnPty: (_file, _args, options) => { launchedCwd = options?.cwd; return pty as never; },
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', provider: 'claude', sessionId: 'directory-app', hasSession: true, projectPath: '/missing/stale/browser/path' }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(launchedCwd, process.cwd());
+  pty.emitExit();
 });

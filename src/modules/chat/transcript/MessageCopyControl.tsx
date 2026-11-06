@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { Download } from 'lucide-react';
 
 import { copyTextToClipboard } from '@/shared/utils';
 
@@ -40,8 +41,8 @@ const convertMarkdownToPlainText = (markdown: string): string => {
 };
 
 /**
- * Rendered by chat's MessageComponent to copy a turn to the clipboard, with a
- * markdown/plain-text format picker on assistant turns.
+ * Rendered by chat's MessageComponent to copy a turn or download an assistant
+ * reply as Markdown/plain text from its format menu.
  */
 const MessageCopyControl = ({
   content,
@@ -68,11 +69,11 @@ const MessageCopyControl = ({
   const openDropdown = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
-      const ESTIMATED_MENU_HEIGHT = 84;
+      const ESTIMATED_MENU_HEIGHT = 160;
       const openUp = rect.bottom + ESTIMATED_MENU_HEIGHT + 8 > window.innerHeight;
       setMenuStyle({
         position: 'fixed',
-        right: Math.max(8, window.innerWidth - rect.right),
+        left: Math.max(8, Math.min(rect.right - 192, window.innerWidth - 200)),
         zIndex: 1000,
         ...(openUp
           ? { bottom: window.innerHeight - rect.top + 4 }
@@ -165,6 +166,26 @@ const MessageCopyControl = ({
     setIsDropdownOpen(false);
   };
 
+  const handleDownload = (format: CopyFormat) => {
+    const payload = format === 'markdown' ? content : convertMarkdownToPlainText(content);
+    if (!payload.trim()) return;
+    const extension = format === 'markdown' ? 'md' : 'txt';
+    const blob = new Blob([payload], { type: `${format === 'markdown' ? 'text/markdown' : 'text/plain'};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `response-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
+    document.body.appendChild(link);
+    try {
+      link.click();
+      setIsDropdownOpen(false);
+    } finally {
+      link.remove();
+      // Keep the URL alive long enough for mobile browsers to start the download.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+  };
+
   const toneClass = messageType === 'user'
     ? 'text-muted-foreground hover:text-foreground'
     : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300';
@@ -231,7 +252,7 @@ const MessageCopyControl = ({
             <div
               ref={menuRef}
               style={menuStyle}
-              className="min-w-36 rounded-md border border-border bg-popover p-1 shadow-lg"
+              className="max-h-[calc(100dvh-16px)] w-48 max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg"
             >
               {copyFormatOptions.map((option) => {
                 const isSelected = option.format === selectedFormat;
@@ -249,6 +270,20 @@ const MessageCopyControl = ({
                   </button>
                 );
               })}
+              <div role="separator" className="my-1 border-t border-border" />
+              {(['text', 'markdown'] as const).map(format => (
+                <button
+                  key={`download-${format}`}
+                  type="button"
+                  onClick={() => handleDownload(format)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                >
+                  <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  {format === 'text'
+                    ? t('copyMessage.downloadAsText', { defaultValue: 'Download as TXT' })
+                    : t('copyMessage.downloadAsMarkdown', { defaultValue: 'Download as Markdown' })}
+                </button>
+              ))}
             </div>,
             document.body,
           )}

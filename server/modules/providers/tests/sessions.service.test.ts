@@ -17,6 +17,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
+  await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
 
   try {
@@ -186,6 +187,11 @@ test('history pages are sliced from the cached full transcript and see appended 
       assert.equal(refreshed.total, 5);
       assert.deepEqual(refreshed.messages.map((message) => message.content), ['reply two', 'three']);
 
+      const cursorPage = await sessionsService.fetchHistory(sessionId, { limit: 2, before: page.oldestCursor });
+      assert.deepEqual(cursorPage.messages.map(message => message.content), ['one', 'reply one']);
+      assert.equal(cursorPage.hasMore, false);
+      await assert.rejects(sessionsService.fetchHistory(sessionId, { limit: 2, before: 'removed-row' }), /History changed/);
+
       // An older page keeps the tail-offset contract while served from cache.
       const older = await sessionsService.fetchHistory(sessionId, { limit: 2, offset: 2 });
       assert.deepEqual(older.messages.map((message) => message.content), ['reply one', 'two']);
@@ -275,7 +281,7 @@ test('running sessions list a session whose background work outlived its turn', 
           startedAt: 1_000,
           lastSeq: run.lastSeq,
           background: true,
-          canInterrupt: false,
+          canInterrupt: true,
           tasks,
         }]);
         assert.ok(run.lastSeq > 0, 'the finished run still reports its sequence for replay');
@@ -425,5 +431,23 @@ test('an unreadable registry never fails the running-sessions poll', { concurren
         );
       },
     );
+  });
+});
+
+
+test('a CLI entry cannot overwrite an owned background session or hide its tasks', { concurrency: false }, async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createAppSession('held-session', 'claude', '/tmp/running-project');
+    sessionsDb.assignProviderSessionId('held-session', 'native-held');
+    const tasks = [task('monitor', 1000)];
+    await withClaudeCliRegistry([{ pid: process.pid, sessionId: 'native-held', startedAt: 500, status: 'busy' }], async () => {
+      await withProviders({ claude: { run: async () => undefined, abort: () => true, listBackgroundWork: () => [{ sessionId: 'held-session', tasks }] } }, async () => {
+        const entries = await sessionsService.listRunningSessions();
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].background, true);
+        assert.equal(entries[0].canInterrupt, true);
+        assert.deepEqual(entries[0].tasks, tasks);
+      });
+    });
   });
 });

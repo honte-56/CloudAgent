@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -13,13 +14,13 @@ import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.j
 
 // Opt-in: runs the installed CLI against a loopback-only fake Messages API.
 // No external inference, credentials, production session or application files.
-for (const background of [false, true]) {
-  test(`real Claude CLI accepts live input with ${background ? 'background' : 'foreground'} Bash intact`, {
+for (const { background, queued, promote } of [{ background: false, queued: false, promote: false }, { background: true, queued: false, promote: false }, { background: false, queued: true, promote: false }, { background: false, queued: true, promote: true }]) {
+  test(`real Claude CLI accepts ${promote ? 'native queued send-now' : queued ? 'native queued' : 'live'} input with ${background ? 'background' : 'foreground'} Bash intact`, {
     skip: process.env.CLOUDCLI_TEST_CLAUDE_LIVE !== '1', timeout: 45_000,
   }, async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'cloudcli-claude-live-'));
     const marker = path.join(directory, 'finished');
-    const sessionId = `isolated-live-${background}`;
+    const sessionId = `isolated-live-${background}-${queued}-${promote}`;
     const requests: string[] = [];
     const frames: NormalizedMessage[] = [];
     const server = createServer(async (request, response) => {
@@ -70,6 +71,7 @@ for (const background of [false, true]) {
         return {
           [Symbol.asyncIterator]: () => instance[Symbol.asyncIterator](),
           interrupt: async () => { await instance.interrupt(); },
+          cancelAsyncMessage: async (id: string) => (instance as unknown as { cancelAsyncMessage(id: string): Promise<boolean> }).cancelAsyncMessage(id),
           stopTask: async (taskId) => { await instance.stopTask(taskId); },
         };
       },
@@ -81,7 +83,16 @@ for (const background of [false, true]) {
           if (!sending && message.kind === (background ? 'complete' : 'tool_use')) {
             // Defer until the initial complete has finished processing its hold.
             sending = new Promise<void>((resolve) => setTimeout(resolve, 100)).then(async () => {
-              await claudeRuntime.steer(sessionId, 'SUPPLEMENT_LIVE_INPUT: keep the current command running.');
+              if (queued) {
+                const first = await claudeRuntime.queue.add(sessionId, 'SUPPLEMENT_LIVE_INPUT: first queued message.', [], randomUUID());
+                const second = await claudeRuntime.queue.add(sessionId, 'SECOND_QUEUED_INPUT: second queued message.', [], randomUUID());
+                assert.equal((await claudeRuntime.queue.list(sessionId)).length, 2);
+                if (promote) {
+                  assert.equal(await claudeRuntime.queue.cancel(sessionId, first.id), true);
+                  await claudeRuntime.queue.sendNow(sessionId, second.id);
+                  assert.ok(frames.some(frame => frame.role === 'user' && String(frame.content).includes('SECOND_QUEUED_INPUT')), 'receipt immediately shows the message');
+                }
+              } else await claudeRuntime.steer(sessionId, 'SUPPLEMENT_LIVE_INPUT: keep the current command running.');
               acknowledgedBeforeCommandEnded = await readFile(marker).then(() => false, () => true);
             });
             void sending.catch(() => {});
@@ -91,9 +102,14 @@ for (const background of [false, true]) {
       assert.ok(sending, 'test submitted a live message');
       await sending;
       assert.equal(queryCount, 1, 'no replacement CLI');
+      if (queued) {
+        assert.ok(requests.some(body => body.includes('SECOND_QUEUED_INPUT')));
+        assert.equal((await claudeRuntime.queue.list(sessionId)).length, 0);
+        assert.equal(new Set(frames.filter(frame => frame.kind === 'text' && frame.role === 'user' && String(frame.content).includes('QUEUED_INPUT')).map(frame => frame.id)).size, 1);
+      }
       assert.equal(acknowledgedBeforeCommandEnded, true, 'CLI queue receipt arrives while Bash is still running');
       assert.equal(await readFile(marker, 'utf8'), 'finished', 'Bash was not interrupted');
-      assert.ok(requests.slice(1).some((body) => body.includes('SUPPLEMENT_LIVE_INPUT')), 'model request includes the follow-up');
+      assert.equal(requests.slice(1).some(body => body.includes('SUPPLEMENT_LIVE_INPUT')), !promote, 'cancelled native input must not reach the model');
       assert.equal(frames.filter((frame) => frame.kind === 'error').length, 0);
       assert.equal(frames.filter((frame) => frame.kind === 'complete').length, background ? 2 : 1);
     } finally {

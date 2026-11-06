@@ -1,10 +1,14 @@
+import { taskProgressService } from '@/modules/providers/services/task-progress.service.js';
 import express, { type Request, type Response } from 'express';
 
+import { nativeMessageQueueService } from '@/modules/providers/services/native-message-queue.service.js';
 import { providerRuntimeService } from '@/modules/providers/services/provider-runtime.service.js';
+import { sessionExecutionService } from '@/modules/providers/services/session-execution.service.js';
 
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { claudeSettingsPermissionsService } from '@/modules/providers/services/claude-settings-permissions.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
+import { providerCliService } from '@/modules/providers/services/provider-cli.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerPlanUsageService } from '@/modules/providers/services/provider-plan-usage.service.js';
@@ -611,6 +615,21 @@ const parseCustomProviderModelPayload = (payload: unknown): CustomProviderModelI
   return effort === undefined ? { model, id } : { model, id, effort };
 };
 
+/** Reads the `{ enabled: boolean }` body of the custom-models-only toggle. */
+const parseCustomModelsOnlyPayload = (payload: unknown): boolean => {
+  const enabled = payload && typeof payload === 'object'
+    ? (payload as Record<string, unknown>).enabled
+    : undefined;
+  if (typeof enabled !== 'boolean') {
+    throw new AppError('enabled must be true or false.', {
+      code: 'INVALID_CUSTOM_MODELS_ONLY',
+      statusCode: 400,
+    });
+  }
+
+  return enabled;
+};
+
 router.get(
   '/:provider/auth/status',
   asyncHandler(async (req: Request, res: Response) => {
@@ -620,11 +639,29 @@ router.get(
   }),
 );
 
+/** The installed CLI version, the newest npm release, whether this server can update the CLI and whether it is doing so. */
+router.get(
+  '/:provider/cli',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    res.json(createApiSuccessResponse(await providerCliService.getCliStatus(provider)));
+  }),
+);
+
+/** Runs the CLI's own updater; refused while the provider is busy in a session. */
+router.post(
+  '/:provider/cli/update',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    res.json(createApiSuccessResponse(await providerCliService.updateCli(provider)));
+  }),
+);
+
 router.get(
   '/:provider/plan-usage',
   asyncHandler(async (req: Request, res: Response) => {
     const provider = parseProvider(req.params.provider);
-    const usage = await providerPlanUsageService.getPlanUsage(provider);
+    const usage = await providerPlanUsageService.getPlanUsage(provider, { forceRefresh: req.query.refresh === 'true' });
     res.json(createApiSuccessResponse(usage));
   }),
 );
@@ -639,15 +676,68 @@ router.get(
 );
 
 // Live input uses an acknowledged HTTP request so a failed send can retain the draft.
-router.post('/sessions/:sessionId/steer', asyncHandler(async (req: Request, res: Response) => {
+router.get('/sessions/:sessionId/execution', asyncHandler(async (req: Request, res: Response) => {
   const sessionId = parseSessionId(req.params.sessionId);
-  const content = req.body?.content;
-  if (typeof content !== 'string' || !content.trim() || content.length > 100_000) {
-    throw new AppError('Live input requires 1–100000 characters of text.', { code: 'INVALID_STEER_INPUT', statusCode: 400 });
+  res.json(createApiSuccessResponse({ owner: sessionExecutionService.get(sessionId) }));
+}));
+
+router.post('/sessions/:sessionId/execution/release', asyncHandler(async (req: Request, res: Response) => {
+  const sessionId = parseSessionId(req.params.sessionId);
+  const ownerId = req.body?.ownerId;
+  if (typeof ownerId !== 'string' || !ownerId || ownerId.length > 100) {
+    throw new AppError('ownerId is required for takeover.', { code: 'INVALID_OWNER', statusCode: 400 });
   }
-  await providerRuntimeService.steer(sessionId, content);
+  await sessionExecutionService.stop(sessionId, ownerId);
+  res.json(createApiSuccessResponse({ released: true }));
+}));
+
+router.get('/sessions/:sessionId/queue', asyncHandler(async (req: Request, res: Response) => {
+  res.json(createApiSuccessResponse({ messages: await nativeMessageQueueService.list(parseSessionId(req.params.sessionId)) }));
+}));
+router.post('/sessions/:sessionId/queue', asyncHandler(async (req: Request, res: Response) => {
+  const { content = '', attachments = [], requestId } = req.body ?? {};
+  if (typeof content !== 'string' || content.length > 100_000 || !Array.isArray(attachments) || attachments.length > 10
+    || (!content.trim() && !attachments.length) || typeof requestId !== 'string' || !/^[\da-f-]{36}$/i.test(requestId)) {
+    throw new AppError('Invalid queued input.', { code: 'INVALID_QUEUE_INPUT', statusCode: 400 });
+  }
+  const message = await nativeMessageQueueService.add(parseSessionId(req.params.sessionId), content, attachments, requestId, Number((req as Request & { user?: { id?: number | string } }).user?.id));
+  res.json(createApiSuccessResponse({ message }));
+}));
+router.delete('/sessions/:sessionId/queue/:messageId', asyncHandler(async (req: Request, res: Response) => {
+  const deleted = await nativeMessageQueueService.cancel(parseSessionId(req.params.sessionId), parseSessionId(req.params.messageId));
+  res.json(createApiSuccessResponse({ deleted }));
+}));
+router.post('/sessions/:sessionId/queue/:messageId/send', asyncHandler(async (req: Request, res: Response) => {
+  await nativeMessageQueueService.sendNow(parseSessionId(req.params.sessionId), parseSessionId(req.params.messageId));
   res.json(createApiSuccessResponse({ delivered: true }));
 }));
+
+router.post('/sessions/:sessionId/steer', asyncHandler(async (req: Request, res: Response) => {
+  const sessionId = parseSessionId(req.params.sessionId);
+  const content = req.body?.content ?? '';
+  const attachments = req.body?.attachments ?? [];
+  if (!Array.isArray(attachments) || attachments.length > 50 || typeof content !== 'string' || (!content.trim() && !attachments.length) || content.length > 100_000) {
+    throw new AppError('Live input requires 1–100000 characters of text.', { code: 'INVALID_STEER_INPUT', statusCode: 400 });
+  }
+  const userId = Number((req as Request & { user?: { id?: number | string } }).user?.id);
+  if (req.body?.queued === true && (!Number.isSafeInteger(userId) || userId <= 0)) {
+    throw new AppError('Authentication required.', { code: 'UNAUTHORIZED', statusCode: 401 });
+  }
+  await providerRuntimeService.steer(sessionId, content, attachments, req.body?.queued === true ? userId : undefined,
+    Number.isSafeInteger(userId) && userId > 0 ? userId : undefined);
+  res.json(createApiSuccessResponse({ delivered: true }));
+}));
+
+/** Turns "use only my models" on or off for one provider and returns its new catalog. */
+router.put(
+  '/:provider/models/custom-only',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const enabled = parseCustomModelsOnlyPayload(req.body);
+    const models = await providerModelsService.setCustomModelsOnly(provider, enabled);
+    res.json(createApiSuccessResponse({ provider, models }));
+  }),
+);
 
 router.post(
   '/:provider/models',
@@ -976,10 +1066,11 @@ router.get(
     const limit = parseBoundedIntegerQuery(req.query.limit, 'limit', null, 0);
     const offset = parseBoundedIntegerQuery(req.query.offset, 'offset', 0, 0);
 
-    const result = await sessionsService.fetchHistory(sessionId, {
-      limit,
-      offset,
-    });
+    const before = req.query.before;
+    if (before !== undefined && (typeof before !== 'string' || !before.length || before.length > 1024)) {
+      throw new AppError('Invalid history cursor.', { code: 'INVALID_CURSOR', statusCode: 400 });
+    }
+    const result = await sessionsService.fetchHistory(sessionId, { limit, offset, before });
     res.json(createApiSuccessResponse(result));
   }),
 );
@@ -989,6 +1080,14 @@ router.get(
  * card is opened. History does not carry it: a run can spawn a dozen agents
  * with hundreds of tool calls each, and the card only lists them.
  */
+router.get('/sessions/:sessionId/tasks/:toolUseId/progress', asyncHandler(async (req: Request, res: Response) => {
+  const sessionId = parseSessionId(req.params.sessionId);
+  const toolUseId = parseSessionId(req.params.toolUseId);
+  const agentId = req.query.agentId === undefined ? undefined : parseWorkflowAgentId(req.query.agentId);
+  const limit = parseBoundedIntegerQuery(req.query.limit, 'limit', 100, 20, 500) ?? 100;
+  res.json(createApiSuccessResponse(await taskProgressService.read(sessionId, toolUseId, { agentId, limit })));
+}));
+
 router.get(
   '/sessions/:sessionId/workflows/:runId/agents/:agentId',
   asyncHandler(async (req: Request, res: Response) => {

@@ -62,14 +62,12 @@ export default function StepReview({
                 </span>
               </div>
 
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-400">
-                  {t('projectWizard.step3.authentication')}
-                </span>
-                <span className="text-xs text-gray-900 dark:text-white">{authenticationLabel}</span>
-              </div>
             </>
           )}
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600 dark:text-gray-400">{t('projectWizard.step3.authentication')}</span>
+            <span className="text-xs text-gray-900 dark:text-white">{authenticationLabel}</span>
+          </div>
         </div>
       </div>
 

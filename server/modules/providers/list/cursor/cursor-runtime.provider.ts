@@ -1,3 +1,6 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter } from '@/shared/types.js';
+
 import crossSpawn from 'cross-spawn';
 
 import {
@@ -12,7 +15,8 @@ import { createCompleteMessage, createNormalizedMessage, flattenPromptForWindows
 // child_process.spawn everywhere else.
 const spawnFunction = crossSpawn;
 
-let activeCursorProcesses = new Map(); // Track active processes by session ID
+type CursorProcess = ChildProcessWithoutNullStreams & { aborted?: boolean };
+const activeCursorProcesses = new Map<string, CursorProcess>(); // Track active processes by session ID
 
 const WORKSPACE_TRUST_PATTERNS = [
   /workspace trust required/i,
@@ -29,7 +33,8 @@ function isWorkspaceTrustPrompt(text = '') {
   return WORKSPACE_TRUST_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-async function spawnCursor(command, options = {}, ws, context) {
+/** Used by the provider registry and Agent API to run Cursor with the prepared project environment. */
+async function spawnCursor(command: string, options: AnyRecord = {}, ws: ProviderRuntimeWriter, context: ProviderRuntimeContext) {
   // Callers pass the stable app session id; the CLI resumes with the
   // provider-native id recorded on the session row. Both lookups run before the
   // promise is created: inside an async executor a rejected `resolveResumeModel`
@@ -37,7 +42,7 @@ async function spawnCursor(command, options = {}, ws, context) {
   const providerSessionId = context.resolveProviderSessionId(options.sessionId);
   const resolvedModel = await context.resolveResumeModel(options.sessionId, options.model);
 
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const {
       sessionId,
       projectPath,
@@ -109,7 +114,7 @@ async function spawnCursor(command, options = {}, ws, context) {
     // id when the caller supplied one, so abort-by-app-id always works.
     const processKey = sessionId || Date.now().toString();
 
-    const settleOnce = (callback) => {
+    const settleOnce = (callback: () => void) => {
       if (settled) {
         return;
       }
@@ -117,13 +122,13 @@ async function spawnCursor(command, options = {}, ws, context) {
       callback();
     };
 
-    const runCursorProcess = (args, runReason = 'initial') => {
+    const runCursorProcess = (args: string[], runReason = 'initial') => {
       const isTrustRetry = runReason === 'trust-retry';
       let runSawWorkspaceTrustPrompt = false;
       let stdoutLineBuffer = '';
       let terminalNotificationSent = false;
 
-      const notifyTerminalState = ({ code = null, error = null } = {}) => {
+      const notifyTerminalState = ({ code = null, error = null, aborted = false }: { code?: number | null; error?: unknown; aborted?: boolean } = {}) => {
         if (terminalNotificationSent) {
           return;
         }
@@ -132,6 +137,19 @@ async function spawnCursor(command, options = {}, ws, context) {
 
         // Notifications are app-facing, so they carry the app session id.
         const finalSessionId = sessionId || capturedSessionId || processKey;
+        // A user abort kills the CLI with SIGTERM, so it exits with code null;
+        // that is a cancellation, not a failure.
+        if (aborted) {
+          notifyRunStopped({
+            userId: ws?.userId || null,
+            provider: 'cursor',
+            sessionId: finalSessionId,
+            sessionName: sessionSummary,
+            stopReason: 'aborted'
+          });
+          return;
+        }
+
         if (code === 0 && !error) {
           notifyRunStopped({
             userId: ws?.userId || null,
@@ -160,11 +178,11 @@ async function spawnCursor(command, options = {}, ws, context) {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: options.environment || process.env // Inherit all environment variables
-      });
+      }) as CursorProcess;
 
       activeCursorProcesses.set(processKey, cursorProcess);
 
-      const shouldSuppressForTrustRetry = (text) => {
+      const shouldSuppressForTrustRetry = (text: string) => {
         if (hasRetriedWithTrust || args.includes('--trust')) {
           return false;
         }
@@ -176,7 +194,7 @@ async function spawnCursor(command, options = {}, ws, context) {
         return true;
       };
 
-      const processCursorOutputLine = (line) => {
+      const processCursorOutputLine = (line: string) => {
         if (!line || !line.trim()) {
           return;
         }
@@ -189,19 +207,20 @@ async function spawnCursor(command, options = {}, ws, context) {
             case 'system':
               if (response.subtype === 'init') {
                 // Capture session ID
-                if (response.session_id && !capturedSessionId) {
-                  capturedSessionId = response.session_id;
+                if (typeof response.session_id === 'string' && response.session_id && !capturedSessionId) {
+                  const nextSessionId: string = response.session_id;
+                  capturedSessionId = nextSessionId;
 
                   // Legacy/direct callers without an app session id re-key the
                   // process under the provider-native id once it is known.
                   if (!sessionId && processKey !== capturedSessionId) {
                     activeCursorProcesses.delete(processKey);
-                    activeCursorProcesses.set(capturedSessionId, cursorProcess);
+                    activeCursorProcesses.set(nextSessionId, cursorProcess);
                   }
 
                   // Set session ID on writer (for API endpoint compatibility)
                   if (ws.setSessionId && typeof ws.setSessionId === 'function') {
-                    ws.setSessionId(capturedSessionId);
+                    ws.setSessionId(nextSessionId);
                   }
 
                   // Send session-created event only once for sessions with nothing to resume
@@ -319,10 +338,10 @@ async function spawnCursor(command, options = {}, ws, context) {
         }
 
         if (code === 0) {
-          notifyTerminalState({ code });
+          notifyTerminalState({ code, aborted: Boolean(cursorProcess.aborted) });
           settleOnce(() => resolve());
         } else {
-          notifyTerminalState({ code });
+          notifyTerminalState({ code, aborted: Boolean(cursorProcess.aborted) });
           settleOnce(() => reject(new Error(`Cursor CLI exited with code ${code}`)));
         }
       });
@@ -346,7 +365,7 @@ async function spawnCursor(command, options = {}, ws, context) {
           completeSent = true;
           ws.send(createCompleteMessage({ provider: 'cursor', sessionId: capturedSessionId || sessionId || null, exitCode: 1 }));
         }
-        notifyTerminalState({ error });
+        notifyTerminalState({ error, aborted: Boolean(cursorProcess.aborted) });
 
         settleOnce(() => reject(error));
       });
@@ -359,7 +378,8 @@ async function spawnCursor(command, options = {}, ws, context) {
   });
 }
 
-function abortCursorSession(sessionId) {
+/** Used by the provider registry to cancel an active Cursor process. */
+function abortCursorSession(sessionId: string) {
   const process = activeCursorProcesses.get(sessionId);
   if (process) {
     console.log(`Aborting Cursor session: ${sessionId}`);
@@ -373,22 +393,9 @@ function abortCursorSession(sessionId) {
   return false;
 }
 
-function isCursorSessionActive(sessionId) {
-  return activeCursorProcesses.has(sessionId);
-}
-
-function getActiveCursorSessions() {
-  return Array.from(activeCursorProcesses.keys());
-}
-
+/** Used by the provider registry for Cursor execution and cancellation. */
 export const cursorRuntime = {
   run: spawnCursor,
   abort: abortCursorSession,
 };
 
-export {
-  spawnCursor,
-  abortCursorSession,
-  isCursorSessionActive,
-  getActiveCursorSessions
-};

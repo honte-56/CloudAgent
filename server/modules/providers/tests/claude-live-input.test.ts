@@ -50,3 +50,21 @@ test('closing a stream rejects every unacknowledged send and unblocks its reader
   await Promise.all(failures);
   assert.equal((await input.stream.next()).done, true);
 });
+
+
+test('later-priority inputs remain independently pending after native queue acknowledgement', async () => {
+  const input = createClaudeInputStream([]);
+  const first = input.send('first', { id: '11111111-1111-4111-8111-111111111111', priority: 'later' });
+  const second = input.send('second', { id: '22222222-2222-4222-8222-222222222222', priority: 'later' });
+  const one = (await input.stream.next()).value!;
+  const two = (await input.stream.next()).value!;
+  assert.equal(one.priority, 'later');
+  assert.equal(two.priority, 'later');
+  input.acknowledge({ type: 'command_lifecycle', command_uuid: one.uuid, state: 'queued' });
+  input.acknowledge({ type: 'command_lifecycle', command_uuid: two.uuid, state: 'queued' });
+  await Promise.all([first, second]);
+  input.acknowledge({ type: 'command_lifecycle', command_uuid: one.uuid, state: 'cancelled' });
+  assert.equal(input.isPending(one.uuid!), false);
+  assert.equal(input.isPending(two.uuid!), true);
+  input.release();
+});

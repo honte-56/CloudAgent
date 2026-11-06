@@ -19,11 +19,11 @@ import type {
   WorkflowInfo,
 } from '@/shared/types.js';
 import { parseFilesInputTag } from '@/shared/image-attachments.js';
-import { isClaudeApiRequestRow } from '@/modules/providers/list/claude/claude-transcript-rows.js';
 import { prepareTranscriptMessages, truncateNestedOutput } from '@/shared/message-unification.js';
 import {
   createNormalizedMessage,
   generateMessageId,
+  isClaudeNonTurnMessageRow,
   isPlaceholderProviderModel,
   readObjectRecord,
   sliceTailPage,
@@ -32,7 +32,10 @@ import {
 } from '@/shared/utils.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { getClaudeSDKSessionStartTime } from '@/modules/providers/list/claude/claude-runtime.provider.js';
-import { summarizeClaudeTokenUsage } from '@/modules/providers/services/provider-token-usage.service.js';
+import {
+  getReportedClaudeContextWindow,
+  summarizeClaudeTokenUsage,
+} from '@/modules/providers/services/provider-token-usage.service.js';
 
 const PROVIDER = 'claude';
 
@@ -120,6 +123,9 @@ async function readClaudeSubagentTranscript(filePath: string): Promise<ClaudeSub
 
       try {
         const entry = JSON.parse(line) as AnyRecord;
+        if (isClaudeNonTurnMessageRow(entry)) {
+          continue;
+        }
         const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : undefined;
         if (timestamp && !transcript.startedAt) {
           transcript.startedAt = timestamp;
@@ -150,7 +156,7 @@ async function readClaudeSubagentTranscript(filePath: string): Promise<ClaudeSub
               continue;
             }
             if (part.type === 'thinking' && typeof part.thinking === 'string' && part.thinking.trim()) {
-              activity.push({ kind: 'thinking', content: part.thinking, timestamp });
+              activity.push({ kind: entry.thinkingDisplay === 'updates' ? 'text' : 'thinking', content: part.thinking, timestamp });
             }
           }
         }
@@ -481,7 +487,7 @@ async function readTranscriptRows(jsonlPath: string, providerSessionId: string):
     }
     try {
       const entry = JSON.parse(line) as AnyRecord;
-      if (entry.sessionId === providerSessionId && !isClaudeApiRequestRow(entry)) {
+      if (entry.sessionId === providerSessionId && !isClaudeNonTurnMessageRow(entry)) {
         rows.push(entry);
       }
     } catch {
@@ -955,6 +961,30 @@ const INTERNAL_CONTENT_PREFIXES = [
   'Base directory for this skill:',
 ] as const;
 
+/**
+ * Claude Code 2.1.282+ writes pasted text into the transcript already wrapped as
+ * `<pasted_content id="ID">\nBODY\n</pasted_content id="ID">`. The closing tag
+ * carries the id too, so a generic closing-tag stripper misses it.
+ */
+const PASTED_CONTENT =
+  /<pasted_content id="([^"]*)">\n?([\s\S]*?)\n?<\/pasted_content(?: id="\1")?>/g;
+
+/**
+ * Replaces each well-formed `<pasted_content>` wrapper with its body so a user
+ * message shows the text that was pasted. Unclosed or mismatched-id wrappers are
+ * left untouched, and a message with no wrapper is returned unchanged.
+ */
+function unwrapPastedContent(text: string): string {
+  let unwrapped = false;
+  const result = text.replace(PASTED_CONTENT, (_match, _id: string, body: string) => {
+    unwrapped = true;
+    return body;
+  });
+
+  if (!unwrapped) return text;
+  return result.replace(/^[\r\n]+|[\r\n]+$/g, '');
+}
+
 function isInternalContent(content: string): boolean {
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
@@ -1036,6 +1066,31 @@ const readOptionalString = (value: unknown): string | undefined =>
  * claim a request that never ran, so those are dropped here rather than
  * guessed at further down.
  */
+// Claude emits one SDK/JSONL assistant row per content block, while stream
+// events number blocks across the entire API response. Even an empty thinking
+// block consumes an index. Keep UUID offsets stable on repeated normalization.
+function createAssistantBlockIndexer() {
+  const responses = new Map<string, { next: number; rows: Map<string, number> }>();
+  return (value: unknown, sessionId: string | null): number => {
+    const raw = readObjectRecord(value);
+    if (raw?.message?.role !== 'assistant' || !raw.message.id || !Array.isArray(raw.message.content)) return 0;
+    const key = `${sessionId}:${raw.parent_tool_use_id || raw.parentToolUseId || 'main'}:${raw.message.id}`;
+    let response = responses.get(key);
+    if (!response) {
+      response = { next: 0, rows: new Map() };
+      responses.set(key, response);
+      if (responses.size > 1024) responses.delete(responses.keys().next().value!);
+    }
+    const rowKey = typeof raw.uuid === 'string' ? raw.uuid : JSON.stringify(raw.message.content);
+    const previous = response.rows.get(rowKey);
+    if (previous !== undefined) return previous;
+    const offset = response.next;
+    response.rows.set(rowKey, offset);
+    response.next += raw.message.content.length;
+    return offset;
+  };
+}
+
 const readAssistantModel = (value: unknown): string | undefined => {
   const model = readOptionalString(value)?.trim();
   return model && !isPlaceholderProviderModel(model) ? model : undefined;
@@ -1207,8 +1262,14 @@ export class ClaudeSessionsProvider implements IProviderSessions {
    * row-shape branches below have several exits, and an anchor missing from one
    * of them would show up as a message the user silently cannot edit.
    */
-  normalizeMessage(rawMessage: unknown, sessionId: string | null): NormalizedMessage[] {
-    const messages = this.normalizeMessageRows(rawMessage, sessionId);
+  normalizeMessage(rawMessage: unknown, sessionId: string | null, blockOffset?: number): NormalizedMessage[] {
+    const messages = this.normalizeMessageRows(rawMessage, sessionId, blockOffset ?? this.assistantBlockOffset(rawMessage, sessionId));
+    // Show the text that was pasted, not the wrapper tags Claude Code stores it in.
+    for (const message of messages) {
+      if (message.role === 'user' && message.kind === 'text' && typeof message.content === 'string') {
+        message.content = unwrapPastedContent(message.content);
+      }
+    }
     // A synthesized id is useless as an anchor — it changes on every read — so
     // a row without its own uuid produces messages with no anchor at all.
     const raw = readObjectRecord(rawMessage);
@@ -1224,9 +1285,33 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     return messages;
   }
 
-  private normalizeMessageRows(rawMessage: unknown, sessionId: string | null): NormalizedMessage[] {
+  // SDK streams have independent message IDs for parent and child agents.
+  private assistantBlockOffset = createAssistantBlockIndexer();
+
+  private streamMessages = new Map<string, { id: string; model?: string }>();
+
+  private normalizeMessageRows(rawMessage: unknown, sessionId: string | null, blockOffset: number): NormalizedMessage[] {
     const raw = readObjectRecord(rawMessage);
     if (!raw) {
+      return [];
+    }
+
+    if (raw.type === 'stream_event') {
+      const event = readObjectRecord(raw.event);
+      if (!event) return [];
+      const channel = `${sessionId}:${raw.parent_tool_use_id || 'main'}`;
+      if (event.type === 'message_start') {
+        this.streamMessages.set(channel, { id: event.message?.id, model: event.message?.model });
+        return [];
+      }
+      const message = this.streamMessages.get(channel);
+      if (event.type === 'message_stop') { this.streamMessages.delete(channel); return []; }
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && message?.id) {
+        const messageKey = `claude-block:${message.id}:${event.index}`;
+        return [createNormalizedMessage({ id: messageKey, messageKey, sessionId, provider: PROVIDER,
+          kind: 'stream_delta', content: event.delta.text, model: message.model,
+          parentToolUseId: raw.parent_tool_use_id || undefined })];
+      }
       return [];
     }
 
@@ -1240,6 +1325,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const messages: NormalizedMessage[] = [];
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
+    // Claude marks public progress replies as thinking blocks with this flag.
+    // Match the CLI: these must remain visible when ordinary thinking is hidden.
+    const thinkingAsUpdate = raw.thinkingDisplay === 'updates';
 
     // The live stream reports on background work — a launched workflow, agent
     // or shell command — through four `system` subtypes that the transcript
@@ -1335,6 +1423,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
         let imagesAttached = false;
         let filesAttached = false;
+        let userTextEmitted = false;
 
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
@@ -1365,7 +1454,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               && !isInternalContent(parsedFiles.text)
             ) {
               messages.push(createNormalizedMessage({
-                id: `${baseId}_text_${partIndex}`,
+                id: userTextEmitted ? `${baseId}_text_${partIndex}` : baseId,
                 sessionId,
                 timestamp: ts,
                 provider: PROVIDER,
@@ -1377,6 +1466,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
                   ? parsedFiles.attachments
                   : undefined,
               }));
+              userTextEmitted = true;
               imagesAttached = true;
               filesAttached = filesAttached || parsedFiles.attachments.length > 0;
             }
@@ -1519,7 +1609,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         sessionId,
         timestamp: ts,
         provider: PROVIDER,
-        kind: 'thinking',
+        kind: thinkingAsUpdate ? 'text' : 'thinking',
+        ...(thinkingAsUpdate ? { role: 'assistant' as const, model: readAssistantModel(raw.message.model) } : {}),
         content: raw.message.content,
       }));
       return messages;
@@ -1562,11 +1653,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       const answeredByModel = readAssistantModel(raw.message.model);
 
       if (Array.isArray(raw.message.content)) {
-        let partIndex = 0;
+        let partIndex = blockOffset;
         for (const part of raw.message.content) {
           if (part.type === 'text' && part.text) {
             messages.push(createNormalizedMessage({
-              id: `${baseId}_${partIndex}`,
+              id: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : `${baseId}_${partIndex}`,
+              messageKey: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : undefined,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
@@ -1577,7 +1669,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
-              id: `${baseId}_${partIndex}`,
+              id: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : `${baseId}_${partIndex}`,
+              messageKey: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : undefined,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
@@ -1588,11 +1681,13 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'thinking' && part.thinking) {
             messages.push(createNormalizedMessage({
-              id: `${baseId}_${partIndex}`,
+              id: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : `${baseId}_${partIndex}`,
+              messageKey: raw.message.id ? `claude-block:${raw.message.id}:${partIndex}` : undefined,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
-              kind: 'thinking',
+              kind: thinkingAsUpdate ? 'text' : 'thinking',
+              ...(thinkingAsUpdate ? { role: 'assistant' as const, model: answeredByModel } : {}),
               content: part.thinking,
             }));
           }
@@ -1666,6 +1761,27 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     return { found: true, resumeThroughId: null };
   }
 
+  /** Reads a native subagent independently of the parent history cache for the task sidebar. */
+  async readSubagentActivity(sessionId: string, agentId: string, limit = MAX_TRANSMITTED_SUBAGENT_ACTIVITIES): Promise<WorkflowAgentActivity | null> {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(agentId)) return null;
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session?.jsonl_path || !session.provider_session_id) return null;
+    const located = await findClaudeSubagentTranscript(path.dirname(session.jsonl_path), session.provider_session_id, agentId);
+    if (!located) return null;
+    const transcript = await readClaudeSubagentTranscript(located.transcriptPath);
+    const meta = await readClaudeSubagentMeta(located.metaPath);
+    return { agent: { id: agentId, label: meta.description ?? meta.agentType, model: transcript.model, status: 'running' },
+      activity: transcript.activity.slice(-limit).map(truncateSubagentActivity), activityCount: transcript.activity.length };
+  }
+
+  /** Reads current workflow membership for the task sidebar, including newly launched agents. */
+  async readWorkflowAgents(sessionId: string, runId: string): Promise<WorkflowAgentActivity['agent'][]> {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(runId)) return [];
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session?.jsonl_path || !session.provider_session_id) return [];
+    return readWorkflowJournal(path.join(path.dirname(session.jsonl_path), session.provider_session_id, 'subagents', 'workflows', runId));
+  }
+
   /**
    * Reads one workflow agent's timeline from the transcript the run wrote for
    * it, under `<projectDir>/<providerSessionId>/subagents/workflows/<runId>/`
@@ -1681,6 +1797,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     sessionId: string,
     runId: string,
     agentId: string,
+    limit = MAX_TRANSMITTED_SUBAGENT_ACTIVITIES,
   ): Promise<WorkflowAgentActivity | null> {
     const session = sessionsDb.getSessionById(sessionId);
     const jsonlPath = session?.jsonl_path;
@@ -1721,7 +1838,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         status,
       },
       activity: transcript.activity
-        .slice(-MAX_TRANSMITTED_SUBAGENT_ACTIVITIES)
+        .slice(-limit)
         .map(truncateSubagentActivity),
       activityCount: transcript.activity.length,
     };
@@ -1770,8 +1887,22 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const normalized: NormalizedMessage[] = [];
+    let pendingForkRows: NormalizedMessage[] = [];
+    // History reads run independently of live streaming; they must not advance
+    // the live normalizer's block counters or share state across pagination.
+    const historyBlockOffset = createAssistantBlockIndexer();
     for (const raw of rawMessages) {
-      normalized.push(...this.normalizeMessage(raw, sessionId));
+      const rows = this.normalizeMessage(raw, sessionId, historyBlockOffset(raw, sessionId));
+      normalized.push(...rows);
+      if (raw.parentToolUseID || raw.parent_tool_use_id || raw.isSidechain) continue;
+      pendingForkRows.push(...rows.filter(row => row.kind === 'text' && (row.role === 'user' || row.role === 'assistant') && !row.isThinking));
+      // A complete reply is a safe prefix: every tool_use kept in the fork
+      // already has its result. Do not offer a mid-tool checkpoint as a turn.
+      if (typeof raw.uuid === 'string' && ['end_turn', 'stop_sequence'].includes(raw.message?.stop_reason)
+        && rows.some(row => row.role === 'assistant' && row.kind === 'text' && !row.isThinking)) {
+        for (const row of pendingForkRows) row.forkAnchorId = raw.uuid;
+        pendingForkRows = [];
+      }
     }
 
     for (const msg of normalized) {
@@ -1811,7 +1942,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       // Carried on every page, like the Codex and OpenCode readers do, so the
       // composer's counter tracks the conversation instead of being frozen at
       // whatever it was when the session was opened.
-      tokenUsage: summarizeClaudeTokenUsage(rawMessages),
+      tokenUsage: summarizeClaudeTokenUsage(
+        rawMessages,
+        undefined,
+        getReportedClaudeContextWindow(providerSessionId),
+      ),
     };
   }
 }

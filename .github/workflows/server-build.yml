@@ -1,0 +1,55 @@
+name: Server Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux x64 server for Node.js 24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HUSKY: '0'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      VITE_IS_PLATFORM: 'true'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '24.21.0'
+          cache: npm
+
+      - name: Install build dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build frontend and backend
+        run: npm run build
+
+      - name: Package and check the Node.js runtime
+        run: node scripts/release/build-node-server-bundle.mjs
+
+      - name: Upload deployable server
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cloudcli-server-linux-x64-${{ github.sha }}
+          path: |
+            release/node-server/*.tar.gz
+            release/node-server/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

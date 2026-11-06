@@ -18,7 +18,7 @@ import { cn } from '@/shared/utils';
 // Inlined from shared/ui/Alert, which was never in the barrel and had this file
 // as its only importer.
 const alertVariants = cva(
-  'relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current',
+  'relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 squircle rounded-3xl border border-border/60 px-4 py-3.5 text-sm shadow-raised has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current',
   {
     variants: {
       variant: {

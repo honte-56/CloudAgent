@@ -478,8 +478,9 @@
     contain: layout style;
   }
 
+  /* The activity pill rises out of the composer on the bouncy spring. */
   .chat-activity-enter {
-    animation: chat-activity-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: chat-activity-enter var(--spring-bouncy-duration) var(--spring-bouncy) both;
     transform-origin: bottom center;
     will-change: transform, opacity, filter;
   }
@@ -488,10 +489,6 @@
     animation: chat-activity-exit 220ms cubic-bezier(0.4, 0, 1, 1) both;
     transform-origin: bottom center;
     will-change: transform, opacity, filter;
-  }
-
-  .chat-activity-tab {
-    clip-path: inset(-8px -8px 0 -8px);
   }
 
   .chat-message {
@@ -869,17 +866,12 @@
     0% {
       opacity: 0;
       filter: blur(3px);
-      transform: translateY(18px) scaleY(0.92);
-    }
-    65% {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateY(-2px) scaleY(1.01);
+      transform: translateY(14px) scale(0.92);
     }
     100% {
       opacity: 1;
       filter: blur(0);
-      transform: translateY(0) scaleY(1);
+      transform: translateY(0) scale(1);
     }
   }
 

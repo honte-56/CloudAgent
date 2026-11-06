@@ -303,7 +303,7 @@ export default function FileTree({ selectedProject, onFileOpen, revealDirectory 
 
       {/* Delete Confirmation Dialog */}
       {operations.deleteConfirmation.isOpen && operations.deleteConfirmation.item && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+        <div className="animate-fade-in fixed inset-0 z-[9999] flex items-center justify-center bg-[hsl(var(--scrim))]">
           <div className="squircle animate-in zoom-in-95 mx-4 max-w-sm rounded-3xl border border-border/50 bg-popover p-5 shadow-floating">
             <div className="mb-4 flex items-center gap-3">
               <div className="rounded-full bg-red-100 p-2 dark:bg-red-900/30">

@@ -589,7 +589,7 @@ function CommandResultModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[min(92dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-3xl border-border/80 bg-popover/95 p-0 shadow-2xl backdrop-blur-xl sm:w-[min(94vw,64rem)]">
+      <DialogContent className="squircle flex h-[min(92dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-3xl border-border/80 bg-popover/95 p-0 shadow-floating backdrop-blur-xl sm:w-[min(94vw,64rem)]">
         <DialogTitle>{activeMeta?.title || t('chat:misc.modalMeta.commandResult')}</DialogTitle>
 
         <div

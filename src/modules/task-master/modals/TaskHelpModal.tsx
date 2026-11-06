@@ -50,8 +50,8 @@ export default function TaskHelpModal({ isOpen, onClose, onCreatePrd }: TaskHelp
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-lg border border-border bg-card shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--scrim))] p-4 backdrop-blur-[2px]">
+      <div className="squircle animate-pop-in max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-border/50 bg-card shadow-floating">
         <div className="flex items-center justify-between border-b border-border p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">

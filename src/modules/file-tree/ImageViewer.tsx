@@ -59,7 +59,7 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
   }, [file.projectId, file.path]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--scrim))]">
       <div className="squircle animate-in zoom-in-95 mx-4 max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-3xl bg-card shadow-floating">
         <div className="flex items-center justify-between px-5 py-4">
           <h3 className="text-lg font-semibold text-foreground">{file.name}</h3>

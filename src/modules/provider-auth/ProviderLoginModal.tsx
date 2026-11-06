@@ -95,9 +95,9 @@ export default function ProviderLoginModal({
   return (
     <div
       data-escape-layer
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50 max-md:items-stretch max-md:justify-stretch"
+      className="animate-fade-in fixed inset-0 z-[9999] flex items-center justify-center bg-[hsl(var(--scrim))] max-md:items-stretch max-md:justify-stretch"
     >
-      <div className="flex h-3/4 w-full max-w-4xl flex-col rounded-lg bg-card shadow-xl max-md:m-0 max-md:h-full max-md:max-w-none max-md:rounded-none md:m-4 md:h-3/4 md:max-w-4xl md:rounded-lg">
+      <div className="squircle animate-pop-in flex h-3/4 w-full max-w-4xl flex-col rounded-3xl bg-card shadow-floating max-md:m-0 max-md:h-full max-md:max-w-none max-md:rounded-none md:m-4 md:h-3/4 md:max-w-4xl md:rounded-3xl">
         <div className="flex items-center justify-between border-b border-border p-4">
           <h3 className="text-lg font-semibold text-foreground">{title}</h3>
           <button

@@ -53,13 +53,13 @@ export default function PrdEditorWorkspace({
   return (
     <div
       className={cn(
-        'fixed inset-0 z-[200] md:bg-black/50 md:flex md:items-center md:justify-center',
+        'animate-fade-in fixed inset-0 z-[200] md:bg-[hsl(var(--scrim))] md:flex md:items-center md:justify-center',
         isFullscreen ? 'md:p-0' : 'md:p-4',
       )}
     >
       <div
         className={cn(
-          'bg-card shadow-2xl flex flex-col',
+          'squircle bg-card shadow-floating flex flex-col',
           'w-full h-full md:rounded-lg md:shadow-2xl',
           isFullscreen
             ? 'md:w-full md:h-full md:rounded-none'

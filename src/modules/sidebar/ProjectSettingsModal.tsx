@@ -48,8 +48,8 @@ export default function ProjectSettingsModal({ project, onClose, onSaved }: Prop
     } catch (err) { setError(err instanceof Error ? err.message : t('projectSettings.saveError')); setStatus('ready'); }
   };
   const unavailable = Boolean(form.credentialId) && !tokens.some(token => String(token.id) === form.credentialId && token.is_active);
-  return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-    <div role="dialog" aria-modal="true" aria-label={t('projectSettings.title')} className="max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-xl">
+  return <div className="animate-fade-in fixed inset-0 z-[60] flex items-center justify-center bg-[hsl(var(--scrim))] p-4 backdrop-blur-[2px]">
+    <div role="dialog" aria-modal="true" aria-label={t('projectSettings.title')} className="squircle animate-pop-in max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl border border-border/50 bg-card p-5 text-foreground shadow-floating">
       <div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{t('projectSettings.title')}</h3><button aria-label={t('projectSettings.close')} disabled={status === 'saving'} onClick={onClose}><X className="h-5 w-5" /></button></div>
       <label className="block space-y-1 text-sm"><span>{t('projectSettings.name')}</span><Input value={form.displayName} disabled={status === 'saving'} onChange={event => setForm({ ...form, displayName: event.target.value })} /></label>
       <label className="block space-y-1 text-sm"><span>{t('projectSettings.directory')}</span><Input value={form.path} disabled={status === 'saving'} onChange={event => setForm({ ...form, path: event.target.value })} /></label>

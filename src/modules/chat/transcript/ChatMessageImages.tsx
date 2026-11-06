@@ -104,7 +104,7 @@ export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      className="animate-fade-in fixed inset-0 z-[100] flex items-center justify-center bg-[hsl(var(--scrim))] backdrop-blur-[2px]"
       onClick={onClose}
       role="dialog"
       aria-modal="true"

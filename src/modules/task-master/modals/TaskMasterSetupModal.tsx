@@ -33,8 +33,8 @@ export default function TaskMasterSetupModal({ isOpen, project, onClose, onAfter
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-16 backdrop-blur-sm">
-      <div className="flex h-[600px] w-full max-w-4xl flex-col rounded-lg border border-border bg-card shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-start justify-center bg-[hsl(var(--scrim))] p-4 pt-16 backdrop-blur-[2px]">
+      <div className="squircle animate-pop-in flex h-[600px] w-full max-w-4xl flex-col rounded-3xl border border-border/50 bg-card shadow-floating">
         <div className="flex items-center justify-between border-b border-border p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">

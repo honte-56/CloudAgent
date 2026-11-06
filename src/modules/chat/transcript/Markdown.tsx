@@ -100,7 +100,7 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
   if (shouldInline) {
     const inlineCode = (
       <code
-        className={`whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted px-1.5 py-0.5 font-mono text-[0.875em] text-foreground ${className || ''
+        className={`whitespace-pre-wrap break-words rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.875em] text-foreground ${className || ''
           }`}
         {...props}
       >
@@ -124,7 +124,7 @@ const CodeBlock = ({ node: _node, className, children, forceBlock, ...props }: C
   }
 
   return (
-    <div className="group my-3 overflow-hidden rounded-xl border border-border bg-muted/50 shadow-sm dark:bg-zinc-900">
+    <div className="squircle group my-3 overflow-hidden rounded-2xl bg-muted/70 dark:bg-muted/60">
       {/* Label row shares the block's background — no divider, ChatGPT-style */}
       <div className="flex items-center justify-between px-4 pt-2">
         <span className="select-none text-xs text-muted-foreground">{languageLabel}</span>
@@ -232,11 +232,11 @@ const markdownComponents = {
     return <>{children}</>;
   },
   blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="my-3 border-l-2 border-primary/50 pl-4 italic text-muted-foreground">
+    <blockquote className="squircle my-3 rounded-2xl border-l-[3px] border-primary/60 bg-muted/50 py-2 pl-4 pr-3 text-muted-foreground">
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-4 border-t border-border" />,
+  hr: () => <hr className="my-5 border-t border-border/70" />,
   p: ({ children }: { children?: React.ReactNode }) => <div className="mb-2 last:mb-0">{children}</div>,
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className="mb-2 list-outside list-disc space-y-1 pl-5 marker:text-current last:mb-0">{children}</ul>
@@ -246,7 +246,7 @@ const markdownComponents = {
   ),
   li: ({ children }: { children?: React.ReactNode }) => <li className="[&>div:last-child]:mb-0 [&>div]:mb-1">{children}</li>,
   table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="my-3 overflow-x-auto rounded-lg border border-border">
+    <div className="squircle my-3 overflow-x-auto rounded-2xl border border-border/70">
       {/* my-0 cancels Tailwind Typography's table margin, which would show as blank bands inside the border */}
       <table className="my-0 min-w-full border-collapse text-sm">{children}</table>
     </div>

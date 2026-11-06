@@ -147,10 +147,10 @@ export default function TaskDetailModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 md:p-4">
+    <div className="animate-fade-in fixed inset-0 z-[100] flex items-center justify-center bg-[hsl(var(--scrim))] md:p-4">
       <div
         className={cn(
-          'w-full md:max-w-4xl h-full md:h-[90vh] bg-card border border-border md:rounded-lg shadow-xl flex flex-col',
+          'squircle w-full md:max-w-4xl h-full md:h-[90vh] bg-card border border-border/50 md:rounded-3xl shadow-floating flex flex-col',
           className,
         )}
       >

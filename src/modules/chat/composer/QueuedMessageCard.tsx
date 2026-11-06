@@ -27,7 +27,7 @@ export default function QueuedMessageCard({
   const { t } = useTranslation('chat');
 
   return (
-    <div className="settings-content-enter mx-auto mb-2 max-w-[54.25rem] rounded-xl rounded-t-none border border-dashed border-primary/25 bg-primary/[0.04] px-3 py-2">
+    <div className="settings-content-enter squircle mx-auto mb-2 max-w-[54.25rem] rounded-3xl border border-dashed border-primary/30 bg-primary/[0.05] px-4 py-2.5">
       <div className="flex items-start gap-2.5">
         <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" aria-hidden />
 
@@ -55,7 +55,7 @@ export default function QueuedMessageCard({
               disabled={isSending}
               aria-label={t('input.steer', { defaultValue: 'Send now' })}
               title={t('input.steer', { defaultValue: 'Send now' })}
-              className="rounded-md p-1.5 text-primary transition-colors hover:bg-primary/10 disabled:opacity-40"
+              className="press rounded-full p-1.5 text-primary hover:bg-primary/10 disabled:opacity-40"
             >
               {isSending ? <Loader2Icon className="h-3.5 w-3.5 animate-spin" /> : <ArrowUpIcon className="h-3.5 w-3.5" />}
             </button>
@@ -66,7 +66,7 @@ export default function QueuedMessageCard({
             disabled={isSending}
             aria-label={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
             title={t('input.queue.edit', { defaultValue: 'Edit queued message' })}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="press rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <PencilIcon className="h-3.5 w-3.5" />
           </button>
@@ -76,7 +76,7 @@ export default function QueuedMessageCard({
             disabled={isSending}
             aria-label={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
             title={t('input.queue.delete', { defaultValue: 'Delete queued message' })}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className="press rounded-full p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
           >
             <XIcon className="h-3.5 w-3.5" />
           </button>

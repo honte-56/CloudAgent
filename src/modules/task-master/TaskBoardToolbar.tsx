@@ -187,7 +187,7 @@ export default function TaskBoardToolbar({
                     </button>
 
                     {isPrdDropdownOpen && (
-                      <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-lg border border-border bg-card shadow-xl">
+                      <div className="squircle absolute right-0 top-full z-30 mt-2 w-56 rounded-2xl border border-border/50 bg-card shadow-floating">
                         <div className="p-2">
                           <button
                             onClick={() => {

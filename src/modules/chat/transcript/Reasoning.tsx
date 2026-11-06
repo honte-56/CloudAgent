@@ -155,7 +155,7 @@ export const ReasoningTrigger = React.memo<ReasoningTriggerProps>(
     return (
       <CollapsibleTrigger
         className={cn(
-          'flex w-full items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
+          'press-soft inline-flex w-auto items-center gap-2 rounded-full bg-muted/70 px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground',
           className
         )}
         {...props}

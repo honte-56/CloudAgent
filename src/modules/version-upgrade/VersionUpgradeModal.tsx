@@ -133,13 +133,13 @@ export function VersionUpgradeModal({
         <div className="fixed inset-0 z-50 flex items-center justify-center">
             {/* Backdrop */}
             <button
-                className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+                className="animate-fade-in fixed inset-0 bg-[hsl(var(--scrim))] backdrop-blur-[2px]"
                 onClick={onClose}
                 aria-label={t('versionUpdate.ariaLabels.closeModal')}
             />
 
             {/* Modal */}
-            <div className="relative mx-4 max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-xl">
+            <div className="squircle animate-pop-in relative mx-4 max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-3xl border border-border/50 bg-card p-6 shadow-floating">
                 {/* Header */}
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">

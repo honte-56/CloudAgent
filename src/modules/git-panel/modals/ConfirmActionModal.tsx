@@ -115,14 +115,14 @@ export default function ConfirmActionModal({ action, onCancel, onConfirm }: Conf
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleCancel} />
+      <div className="animate-fade-in fixed inset-0 bg-[hsl(var(--scrim))] backdrop-blur-[2px]" onClick={handleCancel} />
       {/*
         Capped to the viewport with only the message scrolling, so a long body
         (a multi-paragraph commit message, a long file list) can never push the
         Cancel/Confirm buttons off screen.
       */}
       <div
-        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        className="squircle animate-pop-in relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-border/50 bg-card shadow-floating"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

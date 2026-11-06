@@ -94,10 +94,10 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
     ? t('claudeStatus.elapsed.seconds', { count: seconds, defaultValue: '{{count}}s' })
     : t('claudeStatus.elapsed.minutesSeconds', { minutes, seconds, defaultValue: '{{minutes}}m {{seconds}}s' });
   const tabSurfaceClassName = [
-    'chat-activity-tab inline-flex h-8 items-center rounded-b-none rounded-t-lg border border-b-0 bg-card px-3 text-xs transition-all duration-200',
-    isInputFocused
-      ? 'border-primary/30 shadow-[0_-1px_2px_hsl(var(--foreground)/0.08),1px_0_2px_hsl(var(--foreground)/0.06),-1px_0_2px_hsl(var(--foreground)/0.06)]'
-      : 'border-border/50 shadow-[0_-1px_1px_hsl(var(--foreground)/0.04),1px_0_1px_hsl(var(--foreground)/0.03),-1px_0_1px_hsl(var(--foreground)/0.03)]',
+    // A floating pill above the composer, detached from it so the composer
+    // keeps its full rounded shape while a turn is running.
+    'chat-activity-tab inline-flex h-8 items-center rounded-full border bg-card px-3 text-xs shadow-raised transition-[border-color,box-shadow] duration-200',
+    isInputFocused ? 'border-ring/30' : 'border-border/50',
   ].join(' ');
 
   return (
@@ -125,14 +125,14 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
           <button
             type="button"
             onClick={onAbort}
-            className={`${tabSurfaceClassName} pointer-events-auto gap-1.5 text-muted-foreground hover:bg-card hover:text-destructive`}
+            className={`${tabSurfaceClassName} press pointer-events-auto gap-1.5 text-muted-foreground hover:bg-card hover:text-destructive`}
             aria-label={t('claudeStatus.stop', { defaultValue: 'Stop' })}
           >
             <svg className="h-2.5 w-2.5 fill-current" viewBox="0 0 24 24" aria-hidden>
               <rect x="5" y="5" width="14" height="14" rx="2" />
             </svg>
             <span>{t('claudeStatus.stop', { defaultValue: 'Stop' })}</span>
-            <kbd className="hidden rounded border border-border/60 px-1 text-[10px] text-muted-foreground/70 sm:inline-block">
+            <kbd className="hidden rounded-md bg-muted px-1 text-[10px] text-muted-foreground/70 sm:inline-block">
               esc
             </kbd>
           </button>

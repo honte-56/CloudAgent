@@ -22,9 +22,9 @@ export default function OverwriteConfirmModal({
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onCancel} />
+      <div className="animate-fade-in fixed inset-0 bg-[hsl(var(--scrim))]" onClick={onCancel} />
 
-      <div className="relative w-full max-w-md rounded-lg border border-border bg-card shadow-xl">
+      <div className="squircle animate-pop-in relative w-full max-w-md rounded-3xl border border-border/50 bg-card shadow-floating">
         <div className="p-6">
           <div className="mb-4 flex items-center">
             <div className="mr-3 rounded-full bg-yellow-100 p-2 dark:bg-yellow-900">

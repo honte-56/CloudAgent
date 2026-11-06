@@ -76,7 +76,7 @@ export const TaskProgressPanel = memo(({ sessionId, toolUseId, title, selectedPr
   const more = (snapshot?.totalMessages ?? snapshot?.activityCount ?? 0) > limit && limit < 500;
   const status = snapshot?.status === 'running' ? '运行中' : snapshot?.status === 'completed' ? '已完成'
     : snapshot?.status === 'failed' ? '失败' : snapshot?.status === 'stopped' ? '已停止' : '实时进展';
-  return <aside aria-label="子任务实时进展" className="absolute inset-y-0 right-0 z-30 flex w-full min-w-0 flex-col border-l border-border bg-background shadow-xl md:relative md:inset-auto md:w-[45%] md:min-w-[320px] md:max-w-[680px] md:shrink-0"
+  return <aside aria-label="子任务实时进展" className="squircle absolute inset-y-0 right-0 z-30 flex w-full min-w-0 flex-col border-l border-border/50 bg-background shadow-floating md:relative md:inset-auto md:w-[45%] md:min-w-[320px] md:max-w-[680px] md:shrink-0"
     onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
     <div className="flex shrink-0 items-start gap-2 border-b border-border px-3 py-3">
       <div className="min-w-0 flex-1"><h2 className="break-words text-sm font-medium">{snapshot?.title || title || '子任务进展'}</h2>

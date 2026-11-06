@@ -94,7 +94,6 @@ function ToolGroupContainer({
   const showChildren = isExpanded || isExporting;
   const config = getToolConfig(group.toolName).input;
   const label = config.label || group.toolName;
-  const borderClass = config.colorScheme?.border || 'border-border';
   const iconClass = config.colorScheme?.icon || 'text-muted-foreground';
   const icon = getToolGroupIcon(config.icon, group.toolName);
 
@@ -117,7 +116,9 @@ function ToolGroupContainer({
     <div className="chat-message tool px-3 sm:px-0" data-message-timestamp={group.timestamp || undefined}>
       <button
         type="button"
-        className={`group flex w-full items-center gap-2 border-l-2 ${borderClass} rounded-r-md bg-muted/25 px-3 py-2 text-left transition-colors hover:bg-muted/40 dark:bg-muted/10 dark:hover:bg-muted/20`}
+        // A tonal block rather than a striped row: the tool's colour lives on its
+        // icon tile, so a run of grouped calls reads as one quiet object.
+        className="press-soft squircle group flex w-full items-center gap-2 rounded-2xl bg-muted/70 px-3 py-2 text-left hover:bg-muted"
         onClick={() => setIsExpanded((current) => !current)}
         aria-expanded={isExpanded}
       >
@@ -125,11 +126,11 @@ function ToolGroupContainer({
           className={`h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           aria-hidden
         />
-        <span className={`${iconClass} flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-background/80 text-xs font-medium`}>
+        <span className={`${iconClass} flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg bg-card text-xs font-medium`}>
           {icon}
         </span>
         <span className="min-w-0 flex-shrink-0 text-xs font-medium text-foreground">{label}</span>
-        <span className="flex-shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+        <span className="flex-shrink-0 rounded-full bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
           x{group.messages.length}
         </span>
         {preview && (

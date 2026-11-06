@@ -138,7 +138,7 @@ export default function ProjectCreationWizard({
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
-      <div className="h-full w-full overflow-y-auto rounded-none border-0 border-border bg-card shadow-xl sm:h-auto sm:max-h-[90dvh] sm:max-w-2xl sm:rounded-lg sm:border">
+      <div className="squircle h-full w-full overflow-y-auto rounded-none border-0 border-border/50 bg-card shadow-floating sm:h-auto sm:max-h-[90dvh] sm:max-w-2xl sm:rounded-3xl sm:border">
         <div className="flex items-center justify-between border-b border-border p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">

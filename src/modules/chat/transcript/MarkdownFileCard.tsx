@@ -153,7 +153,7 @@ export default function MarkdownFileCard({ projectId, filePath, fallback }: Mark
       </span>
 
       <Dialog open={previewOpen} onOpenChange={(open) => !open && setPreviewOpen(false)}>
-        <DialogContent className="flex h-[min(90dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-2xl border-border/80 bg-popover p-0 shadow-2xl sm:w-[min(94vw,64rem)]">
+        <DialogContent className="squircle flex h-[min(90dvh,48rem)] w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-3xl border-border/80 bg-popover p-0 shadow-floating sm:w-[min(94vw,64rem)]">
           <DialogTitle>{name}</DialogTitle>
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3 pr-12">
             <span className="min-w-0 truncate text-sm font-medium text-foreground" title={filePath}>{name}</span>

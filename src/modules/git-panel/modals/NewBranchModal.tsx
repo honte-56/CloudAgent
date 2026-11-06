@@ -52,9 +52,9 @@ export default function NewBranchModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="animate-fade-in fixed inset-0 bg-[hsl(var(--scrim))] backdrop-blur-[2px]" onClick={onClose} />
       <div
-        className="relative w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        className="squircle animate-pop-in relative w-full max-w-md overflow-hidden rounded-3xl border border-border/50 bg-card shadow-floating"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-branch-title"

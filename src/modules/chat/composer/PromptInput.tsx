@@ -40,7 +40,9 @@ export const PromptInput = React.forwardRef<HTMLFormElement, PromptInputProps>(
           ref={ref}
           data-slot="prompt-input"
           className={cn(
-            'relative overflow-hidden rounded-xl border border-border/50 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-200 focus-within:border-primary/30 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15',
+            // A floating card: the most raised surface on the page, outlined by a
+            // hairline only so it holds its edge on the bright light-mode panel.
+            'squircle relative overflow-hidden rounded-4xl border border-border/70 bg-card shadow-raised transition-[box-shadow,border-color] duration-200 focus-within:border-ring/35 focus-within:shadow-floating dark:border-border/50',
             className
           )}
           {...props}
@@ -63,7 +65,7 @@ export const PromptInputHeader = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-header"
-    className={cn('px-3 pt-3', className)}
+    className={cn('px-3.5 pt-3.5', className)}
     {...props}
   />
 ));
@@ -96,7 +98,7 @@ export const PromptInputTextarea = React.forwardRef<
     ref={ref}
     data-slot="prompt-input-textarea"
     className={cn(
-      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent px-4 py-2 text-sm leading-6 text-foreground placeholder-muted-foreground/50 focus:outline-none sm:max-h-[300px]',
+      'chat-input-placeholder block max-h-[40vh] w-full resize-none overflow-y-auto bg-transparent px-5 pb-1 pt-3.5 text-[15px] leading-6 text-foreground placeholder-muted-foreground/60 focus:outline-none sm:max-h-[300px]',
       className
     )}
     {...props}
@@ -114,7 +116,7 @@ export const PromptInputFooter = React.forwardRef<
   <div
     ref={ref}
     data-slot="prompt-input-footer"
-    className={cn('flex items-center justify-between border-t border-border/30 px-3 py-2', className)}
+    className={cn('flex items-center justify-between px-2.5 pb-2.5 pt-1', className)}
     {...props}
   />
 ));
@@ -157,7 +159,7 @@ export const PromptInputButton = React.forwardRef<HTMLButtonElement, PromptInput
         type="button"
         variant="ghost"
         size="icon"
-        className={cn('h-8 w-8 [&_svg]:size-4', className)}
+        className={cn('h-8 w-8 text-muted-foreground sm:h-9 sm:w-9 [&_svg]:size-[18px]', className)}
         {...props}
       >
         {children}
@@ -206,7 +208,7 @@ export const PromptInputSubmit = React.forwardRef<HTMLButtonElement, PromptInput
         type={isActive ? 'button' : 'submit'}
         variant="default"
         size="icon"
-        className={cn('h-8 w-8 shrink-0 rounded-lg', className)}
+        className={cn('h-10 w-10 shrink-0 rounded-full', className)}
         {...props}
       >
         {children ?? (isActive ? (

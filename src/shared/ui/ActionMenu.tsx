@@ -187,9 +187,10 @@ export function ActionMenu({
       data-escape-layer
       className={cn(
         portal ? 'fixed z-[70]' : 'absolute top-full z-50 mt-2',
-        'min-w-[220px] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg',
+        'squircle min-w-[220px] rounded-2xl border border-border/50 bg-popover p-1.5 text-popover-foreground shadow-floating',
         'animate-in fade-in-0 zoom-in-95',
-        !portal && (align === 'right' ? 'right-0' : 'left-0'),
+        !portal && (align === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left'),
+        portal && 'origin-top-right',
         menuClassName,
       )}
       style={portal && portalPosition ? portalPosition : undefined}
@@ -206,12 +207,12 @@ export function ActionMenu({
               disabled={item.disabled || item.loading}
               onClick={() => runItem(item)}
               className={cn(
-                'flex w-full items-start gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors',
+                'press-soft flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left text-sm',
                 'focus:outline-none focus-visible:bg-accent',
                 item.disabled || item.loading
                   ? 'cursor-not-allowed opacity-50'
                   : item.isDanger
-                    ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950'
+                    ? 'text-red-600 hover:bg-red-500/10 dark:text-red-400'
                     : 'hover:bg-accent',
               )}
             >

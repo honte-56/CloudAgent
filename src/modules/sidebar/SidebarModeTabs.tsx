@@ -24,8 +24,7 @@ type SidebarModeTabsProps = {
 };
 
 /**
- * Used by SidebarHeader for the section strip above the search box, in both the
- * desktop and the mobile header.
+ * Used by SidebarHeader for the section strip above the search box.
  *
  * The sidebar is resizable, so the strip cannot assume it has room for all four
  * tabs: the ones that no longer fit move into a "…" dropdown at its right edge
@@ -61,13 +60,13 @@ export default function SidebarModeTabs({
         aria-label={tab.showLabel ? undefined : tab.label}
         title={tab.showLabel ? undefined : tab.label}
         className={cn(
-          'flex min-w-0 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all',
-          tab.mode === 'archived' && 'px-2.5',
+          'press flex min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium',
+          tab.mode === 'archived' && 'px-3',
           canGrow && tab.showLabel && 'flex-1',
           isActive
-            ? 'bg-background text-foreground shadow-sm'
+            ? 'bg-card text-foreground shadow-raised dark:bg-accent'
             : 'text-muted-foreground hover:text-foreground',
-          isActive && tab.mode === 'running' && 'ring-1 ring-emerald-500/15',
+          isActive && tab.mode === 'running' && 'ring-1 ring-emerald-500/20',
         )}
       >
         {tab.mode === 'running' ? (
@@ -100,7 +99,7 @@ export default function SidebarModeTabs({
       variant="ghost"
       size="sm"
       className="flex-none"
-      triggerClassName="h-auto rounded-md px-2 py-1.5 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3.5"
+      triggerClassName="h-auto rounded-full px-2 py-1.5 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3.5"
       items={hiddenTabs.map((tab) => ({
         key: tab.mode,
         label: tab.label,
@@ -111,7 +110,7 @@ export default function SidebarModeTabs({
   );
 
   return (
-    <div className="rounded-lg bg-muted/50 p-0.5">
+    <div className="rounded-full bg-foreground/[0.05] p-1 dark:bg-foreground/[0.06]">
       <div ref={rowRef} className="relative flex">
         {visibleIndexes.map((index) => (
           <Fragment key={tabs[index].mode}>{renderTab(tabs[index], true)}</Fragment>

@@ -80,7 +80,7 @@ export default function WorkspaceTitle({
   return (
     <div className="scrollbar-hide flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
       {showSessionIcon && (
-        <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-muted">
           <LLMProviderLogo provider={selectedSession?.__provider} className="h-4 w-4" />
         </div>
       )}
@@ -102,30 +102,30 @@ export default function WorkspaceTitle({
                 aria-label={t('mainContent.renameSessionLabel')}
                 // Blur cancels, so a touch keyboard needs a key that commits.
                 enterKeyHint="done"
-                className="w-full max-w-md rounded border border-border bg-background px-1.5 py-0.5 text-sm font-semibold leading-tight text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full max-w-md rounded-lg bg-input px-2 py-0.5 text-[15px] font-semibold leading-snug text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
               />
             ) : (
               <h2
                 title={t('mainContent.renameSessionHint', { title: sessionTitle })}
                 onDoubleClick={startRenaming}
-                className="cursor-text truncate text-sm font-semibold leading-tight text-foreground"
+                className="cursor-text truncate text-[15px] font-semibold leading-snug text-foreground"
               >
                 {sessionTitle}
               </h2>
             )}
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
+            <h2 className="truncate text-[15px] font-semibold leading-snug text-foreground">{t('mainContent.newSession')}</h2>
             <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
           </div>
         ) : (
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold leading-tight text-foreground">
+            <h2 className="truncate text-[15px] font-semibold leading-snug text-foreground">
               {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
           </div>
         )}
       </div>

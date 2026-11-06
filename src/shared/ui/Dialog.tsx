@@ -179,7 +179,7 @@ export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps
       <div className={cn('fixed inset-0 z-50', wrapperClassName)}>
         {/* Overlay */}
         <div
-          className="fixed inset-0 animate-dialog-overlay-show bg-black/50 backdrop-blur-sm"
+          className="fixed inset-0 animate-dialog-overlay-show bg-[hsl(var(--scrim))] backdrop-blur-[2px]"
           onClick={() => {
             onPointerDownOutside?.();
             onOpenChange(false);
@@ -197,7 +197,7 @@ export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps
           aria-modal="true"
           className={cn(
             'fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
-            'rounded-xl border bg-popover text-popover-foreground shadow-lg',
+            'squircle rounded-3xl border border-border/40 bg-popover text-popover-foreground shadow-floating',
             animationClassName ?? 'animate-dialog-content-show',
             className
           )}

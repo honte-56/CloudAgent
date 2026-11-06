@@ -157,7 +157,7 @@ function WorkspaceMain({
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
-          <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
+          <div className={`view-enter h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <WorkspaceErrorBoundary showDetails>
               <ChatInterface
                 isActive={activeTab === 'chat'}
@@ -180,7 +180,7 @@ function WorkspaceMain({
           </div>
 
           {activeTab === 'files' && (
-            <div className="h-full overflow-hidden">
+            <div className="view-enter h-full overflow-hidden">
               <FileTree
                 selectedProject={selectedProject}
                 onFileOpen={handleFileOpen}
@@ -190,7 +190,7 @@ function WorkspaceMain({
           )}
 
           {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
+            <div className="view-enter h-full w-full overflow-hidden">
               <StandaloneShell
                 project={selectedProject}
                 session={selectedSession}
@@ -201,7 +201,7 @@ function WorkspaceMain({
           )}
 
           {activeTab === 'git' && (
-            <div className="h-full overflow-hidden">
+            <div className="view-enter h-full overflow-hidden">
               <GitPanel
                 selectedProject={selectedProject}
                 isMobile={isMobile}
@@ -215,13 +215,13 @@ function WorkspaceMain({
           {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
 
           {shouldShowBrowserTab && activeTab === 'browser' && (
-            <div className="h-full overflow-hidden">
+            <div className="view-enter h-full overflow-hidden">
               <BrowserUsePanel isVisible={activeTab === 'browser'} onShowSettings={onShowSettings} />
             </div>
           )}
 
           {activeTab.startsWith('plugin:') && (
-            <div className="h-full overflow-hidden">
+            <div className="view-enter h-full overflow-hidden">
               <PluginTabContent
                 pluginName={activeTab.replace('plugin:', '')}
                 selectedProject={selectedProject}

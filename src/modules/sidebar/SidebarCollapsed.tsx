@@ -31,11 +31,11 @@ export default function SidebarCollapsed({
   t,
 }: SidebarCollapsedProps) {
   return (
-    <div className="flex h-full w-12 flex-col items-center gap-1 bg-background/80 py-3 backdrop-blur-sm">
+    <div className="flex h-full w-14 flex-col items-center gap-1 bg-chrome py-3">
       {/* Expand button with brand logo */}
       <button
         onClick={onExpand}
-        className="group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent/80"
+        className="press group flex h-10 w-10 items-center justify-center rounded-full hover:bg-foreground/[0.06]"
         aria-label={t('common:versionUpdate.ariaLabels.showSidebar')}
         title={t('common:versionUpdate.ariaLabels.showSidebar')}
       >
@@ -47,7 +47,7 @@ export default function SidebarCollapsed({
       {/* Settings */}
       <button
         onClick={onShowSettings}
-        className="group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent/80"
+        className="press group flex h-10 w-10 items-center justify-center rounded-full hover:bg-foreground/[0.06]"
         aria-label={t('actions.settings')}
         title={t('actions.settings')}
       >
@@ -59,7 +59,7 @@ export default function SidebarCollapsed({
         href={GITHUB_ISSUES_URL}
         target="_blank"
         rel="noopener noreferrer"
-        className="group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent/80"
+        className="press group flex h-10 w-10 items-center justify-center rounded-full hover:bg-foreground/[0.06]"
         aria-label={t('actions.reportIssue')}
         title={t('actions.reportIssue')}
       >
@@ -71,7 +71,7 @@ export default function SidebarCollapsed({
         href={DISCORD_INVITE_URL}
         target="_blank"
         rel="noopener noreferrer"
-        className="group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent/80"
+        className="press group flex h-10 w-10 items-center justify-center rounded-full hover:bg-foreground/[0.06]"
         aria-label={t('actions.joinCommunity')}
         title={t('actions.joinCommunity')}
       >
@@ -81,7 +81,7 @@ export default function SidebarCollapsed({
       {/* Restart-required indicator */}
       {restartRequired && (
         <div
-          className="relative flex h-8 w-8 items-center justify-center rounded-lg"
+          className="relative flex h-10 w-10 items-center justify-center rounded-full"
           aria-label={t('version.restartRequired')}
           title={t('version.restartRequired')}
         >
@@ -94,7 +94,7 @@ export default function SidebarCollapsed({
       {updateAvailable && (
         <button
           onClick={onShowVersionModal}
-          className="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent/80"
+          className="press relative flex h-10 w-10 items-center justify-center rounded-full hover:bg-foreground/[0.06]"
           aria-label={t('common:versionUpdate.ariaLabels.updateAvailable')}
           title={t('common:versionUpdate.ariaLabels.updateAvailable')}
         >

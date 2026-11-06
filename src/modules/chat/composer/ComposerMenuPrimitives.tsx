@@ -26,7 +26,7 @@ export function ComposerMenuSurface({
       ref={menuRef}
       role="menu"
       aria-label={ariaLabel}
-      className="fixed z-[100] min-w-48 overflow-y-auto overscroll-contain rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+      className="squircle animate-in zoom-in-95 fixed z-[100] min-w-48 origin-bottom-right overflow-y-auto overscroll-contain rounded-2xl border border-border/50 bg-popover p-1.5 text-popover-foreground shadow-floating"
       style={{
         right: anchor.right,
         bottom: anchor.bottom,
@@ -78,7 +78,7 @@ export function ComposerMenuItem({
       aria-checked={role === 'menuitemradio' ? isSelected : undefined}
       onClick={onSelect}
       className={cn(
-        'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors',
+        'press-soft flex w-full items-start gap-2.5 rounded-xl px-3 py-2 text-left text-sm',
         'hover:bg-accent focus-visible:bg-accent focus-visible:outline-none',
         isSelected ? 'text-foreground' : 'text-foreground/90',
         className,

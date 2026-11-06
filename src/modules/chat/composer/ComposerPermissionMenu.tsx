@@ -36,34 +36,34 @@ const MODE_APPEARANCE: Record<PermissionMode, ModeAppearance> = {
   default: {
     icon: Hand,
     label: 'Default Mode',
-    trigger: 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted',
+    trigger: 'bg-muted text-muted-foreground hover:bg-accent hover:text-foreground',
     item: 'text-foreground',
   },
   auto: {
     icon: Bot,
     label: 'Auto Mode',
     trigger:
-      'border-blue-300/60 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-600/40 dark:bg-blue-900/15 dark:text-blue-300 dark:hover:bg-blue-900/25',
+      'bg-blue-500/12 text-blue-700 hover:bg-blue-500/18 dark:text-blue-300',
     item: 'text-blue-700 dark:text-blue-300',
   },
   acceptEdits: {
     icon: Smile,
     label: 'Accept Edits',
     trigger:
-      'border-green-300/60 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-600/40 dark:bg-green-900/15 dark:text-green-300 dark:hover:bg-green-900/25',
+      'bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18 dark:text-emerald-300',
     item: 'text-green-700 dark:text-green-300',
   },
   bypassPermissions: {
     icon: AlertTriangle,
     label: 'Bypass Permissions',
     trigger:
-      'border-orange-300/60 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25',
+      'bg-orange-500/12 text-orange-700 hover:bg-orange-500/18 dark:text-orange-300',
     item: 'text-orange-600 dark:text-orange-400',
   },
   plan: {
     icon: ClipboardList,
     label: 'Plan Mode',
-    trigger: 'border-primary/20 bg-primary/5 text-primary hover:bg-primary/10',
+    trigger: 'bg-primary-container text-primary-container-foreground hover:brightness-[0.97] dark:hover:brightness-110',
     item: 'text-primary',
   },
 };
@@ -71,7 +71,7 @@ const MODE_APPEARANCE: Record<PermissionMode, ModeAppearance> = {
 const UNKNOWN_MODE: ModeAppearance = {
   icon: ShieldQuestion,
   label: '',
-  trigger: 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted',
+  trigger: 'bg-muted text-muted-foreground hover:bg-accent hover:text-foreground',
   item: 'text-foreground',
 };
 
@@ -133,7 +133,7 @@ function ComposerPermissionMenu({
           updateAnchor();
           setIsOpen((current) => !current);
         }}
-        className={`flex h-8 min-w-8 max-w-40 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors sm:max-w-48 ${isNameShown ? 'px-2' : 'w-8'} ${activeAppearance.trigger}`}
+        className={`press flex h-8 min-w-8 max-w-40 shrink-0 items-center justify-center gap-1.5 rounded-full text-xs font-medium sm:h-9 sm:min-w-9 sm:max-w-48 ${isNameShown ? 'px-3' : 'w-8 sm:w-9'} ${activeAppearance.trigger}`}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         // The mode name leads the accessible name, so what a screen reader

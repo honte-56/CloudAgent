@@ -20,7 +20,7 @@ export default function QuickSettingsPanelHeader({
   const pinLabel = isPinned ? t('quickSettings.unpin') : t('quickSettings.pin');
 
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 p-4">
+    <div className="flex items-center justify-between gap-2 px-4 pb-2 pt-4">
       <h3 className="flex items-center gap-2 text-lg font-semibold text-foreground">
         <Settings2 className="h-5 w-5 text-muted-foreground" />
         {t('quickSettings.title')}
@@ -33,7 +33,7 @@ export default function QuickSettingsPanelHeader({
             aria-pressed={isPinned}
             aria-label={pinLabel}
             title={pinLabel}
-            className={`rounded-md p-1.5 transition-colors hover:bg-accent ${isPinned ? 'text-foreground' : 'text-muted-foreground'}`}
+            className={`press rounded-full p-2 hover:bg-foreground/[0.06] ${isPinned ? 'text-foreground' : 'text-muted-foreground'}`}
           >
             {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
           </button>
@@ -45,7 +45,7 @@ export default function QuickSettingsPanelHeader({
             onClick={onClose}
             aria-label={t('quickSettings.close')}
             title={t('quickSettings.close')}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="press rounded-full p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>

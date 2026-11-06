@@ -123,11 +123,11 @@ export default function SidebarProjectSessions({
       : t('sessions.selectAll');
 
   return (
-    <div className="ml-3 space-y-1 border-l border-border pl-3">
+    <div className="ml-4 space-y-0.5 border-l border-foreground/10 pl-2">
       {isCompact ? (
         <div className="px-3 pb-1 pt-1">
           <button
-            className="flex h-8 w-full items-center justify-center gap-2 rounded-md bg-primary text-xs font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90 active:scale-[0.98]"
+            className="press flex h-10 w-full items-center justify-center gap-2 rounded-full bg-primary-container text-sm font-medium text-primary-container-foreground"
             onClick={() => {
               onProjectSelect(project);
               onNewSession(project);
@@ -141,7 +141,7 @@ export default function SidebarProjectSessions({
         <Button
           variant="default"
           size="sm"
-          className="flex h-8 w-full justify-start gap-2 bg-primary text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          className="flex h-8 w-full justify-start gap-2 rounded-full bg-primary-container px-3 text-xs font-medium text-primary-container-foreground hover:bg-primary-container hover:brightness-[0.97] dark:hover:brightness-110"
           onClick={() => onNewSession(project)}
         >
           <Plus className="h-3 w-3" />
@@ -150,7 +150,7 @@ export default function SidebarProjectSessions({
       )}
 
       {(isSelecting || (initialSessionsLoaded && selectableSessionIds.length > 0)) && (
-        <div className={cn('space-y-1', isCompact && 'px-3')}>
+        <div className={cn('space-y-1', isCompact && 'px-2')}>
           {isSelecting ? (
             <>
               {/* Wraps rather than clips: at the narrowest sidebar width a long

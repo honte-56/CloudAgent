@@ -3,11 +3,12 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
-  TouchEvent as ReactTouchEvent,
+  RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useProjectSidebarState } from '@/modules/project-workspace/context/ProjectsStateContext';
+import { useSidebarDrawerGesture } from '@/modules/project-workspace/hooks/useSidebarDrawerGesture';
 import { Sidebar } from '@/modules/sidebar';
 import { useUiPreferences } from '@/shared/context/UiPreferencesContext';
 import {
@@ -18,10 +19,16 @@ import {
 } from '@/shared/hooks/useSidebarWidth';
 import type { ProjectWorkspaceShellProps } from '@/shared/types';
 
+type ProjectSidebarRegionProps = Pick<ProjectWorkspaceShellProps, 'isMobile'> & {
+  /** The workspace root, which carries the drawer's progress for the main layer to follow. */
+  motionRootRef: RefObject<HTMLDivElement | null>;
+};
+
 /** Rendered by ProjectWorkspaceShell to host the sidebar module, docked on desktop and as a drawer on mobile. */
 function ProjectSidebarRegion({
   isMobile,
-}: Pick<ProjectWorkspaceShellProps, 'isMobile'>) {
+  motionRootRef,
+}: ProjectSidebarRegionProps) {
   const { t } = useTranslation('common');
   const { sidebarOpen, setSidebarOpen, sidebarSharedProps } = useProjectSidebarState();
   const { width: sidebarWidth, setWidth: setSidebarWidth, resetWidth: resetSidebarWidth } = useSidebarWidth();
@@ -33,14 +40,27 @@ function ProjectSidebarRegion({
   const resizeOriginRef = useRef<{ pointerX: number; width: number } | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const pendingWidthRef = useRef<number>(sidebarWidth);
+  const drawerPanelRef = useRef<HTMLDivElement>(null);
+
+  useSidebarDrawerGesture({
+    enabled: isMobile,
+    open: sidebarOpen,
+    setOpen: setSidebarOpen,
+    rootRef: motionRootRef,
+    panelRef: drawerPanelRef,
+  });
+
+  // Escape closes the drawer the same way a tap on the scrim does.
+  useEffect(() => {
+    if (!isMobile || !sidebarOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMobile, sidebarOpen, setSidebarOpen]);
 
   const handleBackdropClick = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    setSidebarOpen(false);
-  }, [setSidebarOpen]);
-
-  const handleBackdropTouch = useCallback((event: ReactTouchEvent<HTMLButtonElement>) => {
-    event.preventDefault();
     event.stopPropagation();
     setSidebarOpen(false);
   }, [setSidebarOpen]);
@@ -118,7 +138,7 @@ function ProjectSidebarRegion({
   if (!isMobile) {
     return (
       <div
-        className="relative h-full flex-shrink-0 border-r border-border/50"
+        className="relative h-full flex-shrink-0"
         style={isSidebarResizable ? { width: sidebarWidth } : undefined}
       >
         <Sidebar {...sidebarSharedProps} />
@@ -131,7 +151,7 @@ function ProjectSidebarRegion({
             aria-valuemin={SIDEBAR_WIDTH_MIN}
             aria-valuemax={SIDEBAR_WIDTH_MAX}
             tabIndex={0}
-            className="absolute inset-y-0 -right-0.5 z-10 w-1 cursor-col-resize hover:bg-primary/40 focus-visible:bg-primary/60 focus-visible:outline-none"
+            className="absolute inset-y-3 -right-1 z-10 w-2 cursor-col-resize rounded-full transition-colors hover:bg-primary/25 focus-visible:bg-primary/40 focus-visible:outline-none"
             onPointerDown={handleResizeStart}
             onPointerMove={handleResizeMove}
             onPointerUp={handleResizeEnd}
@@ -144,24 +164,25 @@ function ProjectSidebarRegion({
     );
   }
 
+  // The scrim closes on click rather than touchstart so that a swipe starting
+  // on it can drag the drawer shut instead of dismissing it instantly.
   return (
     <div
-      className={`fixed inset-0 z-50 flex transition-all duration-150 ease-out ${
-        sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
-      }`}
+      className="workspace-drawer fixed inset-0 z-[60] flex"
+      data-open={sidebarOpen}
+      aria-hidden={!sidebarOpen}
     >
       <button
-        className="fixed inset-0 bg-background/60 backdrop-blur-sm transition-opacity duration-150 ease-out"
+        type="button"
+        tabIndex={-1}
+        className="workspace-drawer-scrim fixed inset-0 bg-[hsl(var(--scrim))]"
         onClick={handleBackdropClick}
-        onTouchStart={handleBackdropTouch}
         aria-label={t('versionUpdate.ariaLabels.closeSidebar')}
       />
       <div
-        className={`relative h-full w-[85vw] max-w-sm transform border-r border-border/40 bg-card transition-transform duration-150 ease-out sm:w-80 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        ref={drawerPanelRef}
+        className="workspace-drawer-panel squircle relative h-full w-[86vw] max-w-[340px] overflow-hidden rounded-r-4xl bg-chrome shadow-floating"
         onClick={(event) => event.stopPropagation()}
-        onTouchStart={(event) => event.stopPropagation()}
       >
         <Sidebar {...sidebarSharedProps} />
       </div>

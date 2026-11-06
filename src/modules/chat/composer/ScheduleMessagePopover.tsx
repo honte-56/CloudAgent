@@ -75,8 +75,8 @@ export function ScheduleMessagePopover({ disabled, onSchedule }: ScheduleMessage
         aria-label={ariaLabel}
         title={ariaLabel}
         className={cn(
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40 text-muted-foreground transition-colors',
-          disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-muted hover:text-foreground',
+          'press flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground sm:h-9 sm:w-9',
+          disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-foreground/[0.06] hover:text-foreground',
           isOpen && 'text-foreground',
         )}
       >
@@ -109,7 +109,7 @@ export function ScheduleMessagePopover({ disabled, onSchedule }: ScheduleMessage
               type="datetime-local"
               value={customValue}
               onChange={(event) => setCustomValue(event.target.value)}
-              className="mt-1 w-full rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground"
+              className="mt-1 w-full rounded-xl bg-input px-3 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring/30"
             />
             <button
               type="button"
@@ -117,7 +117,7 @@ export function ScheduleMessagePopover({ disabled, onSchedule }: ScheduleMessage
                 const parsed = readLocalDateTime(customValue);
                 if (parsed) commit(parsed);
               }}
-              className="mt-2 w-full rounded-md bg-primary px-2 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+              className="press mt-2 w-full rounded-full bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90"
             >
               {t('schedule.confirm')}
             </button>

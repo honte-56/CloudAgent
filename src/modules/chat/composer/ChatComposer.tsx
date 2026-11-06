@@ -419,7 +419,7 @@ export default function ChatComposer({
 
           {attachedFiles.length > 0 && (
             <PromptInputHeader>
-              <div className="rounded-xl bg-muted/40 p-2">
+              <div className="squircle rounded-3xl bg-muted p-2">
                 <div className="flex flex-wrap gap-2">
                   {attachedFiles.map((file, index) => (
                     <ComposerAttachment
@@ -445,8 +445,8 @@ export default function ChatComposer({
           <input {...getInputProps()} />
 
           <PromptInputBody>
-            <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
-              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-4 py-2 text-sm leading-6 text-transparent">
+            <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+              <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words px-5 pb-1 pt-3.5 text-[15px] leading-6 text-transparent">
                 {renderInputWithMentions(input)}
               </div>
             </div>
@@ -468,7 +468,7 @@ export default function ChatComposer({
         </PromptInputBody>
 
         <PromptInputFooter className="flex-wrap gap-y-1">
-          <PromptInputTools className="min-w-0">
+          <PromptInputTools className="min-w-0 gap-0.5 sm:gap-1">
             <PromptInputButton
               tooltip={{ content: t('input.attachFiles') }}
               onClick={openAttachmentPicker}
@@ -510,7 +510,7 @@ export default function ChatComposer({
 
           </PromptInputTools>
 
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
             <ScheduleMessagePopover
               disabled={!input.trim()}
               onSchedule={onScheduleMessage}
@@ -560,7 +560,7 @@ export default function ChatComposer({
               }
               aria-label={attachmentsPending ? "附件上传完成后才能发送" : isSending ? "等待服务器接收确认" : submitAriaLabel}
               title={attachmentsPending ? "附件上传完成后才能发送" : isSending ? "等待服务器接收确认" : submitAriaLabel}
-              className="h-10 w-10 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 sm:h-10 sm:w-10"
+              className="h-10 w-10 disabled:bg-muted disabled:text-muted-foreground/70 disabled:opacity-100"
             >
               {isTranscribing || isSending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

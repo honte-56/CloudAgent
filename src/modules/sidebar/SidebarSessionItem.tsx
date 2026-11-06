@@ -180,14 +180,13 @@ function SidebarSessionItem({
           aria-disabled={isSelecting && !isSelectable ? true : undefined}
           tabIndex={isSelecting ? 0 : undefined}
           className={cn(
-            'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
-            isSelected ? 'bg-primary/5 border-primary/20' : '',
-            !isSelected && isProcessing
-              ? 'border-border/60 bg-muted/20'
-              : !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
-            isChecked && 'border-primary/40 bg-primary/10',
+            'press-soft squircle relative mx-2 my-0.5 rounded-2xl px-3 py-2.5',
+            isSelected
+              ? 'bg-primary-container text-primary-container-foreground'
+              : isProcessing
+                ? 'bg-foreground/[0.04]'
+                : 'active:bg-foreground/[0.05]',
+            isChecked && 'bg-primary-container ring-1 ring-primary/30',
           )}
           onClick={isSelecting ? (isSelectable ? toggleSelected : undefined) : selectMobileSession}
           onKeyDown={isSelecting ? handleSelectionKeyDown : undefined}
@@ -196,8 +195,8 @@ function SidebarSessionItem({
             {selectionIcon}
             <div
               className={cn(
-                'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
+                'w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0',
+                isSelected ? 'bg-card/70' : 'bg-foreground/[0.06]',
               )}
             >
               <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
@@ -206,7 +205,7 @@ function SidebarSessionItem({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <div
-                  className="min-w-0 flex-1 truncate text-sm font-normal text-foreground"
+                  className="min-w-0 flex-1 truncate text-sm font-normal"
                   title={sessionView.sessionName}
                 >
                   {sessionView.sessionName}
@@ -238,7 +237,7 @@ function SidebarSessionItem({
                 aria-label={`Session options for ${sessionView.sessionName}`}
                 aria-haspopup="dialog"
                 aria-expanded={isMobileOptionsOpen}
-                className="ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted active:scale-95"
+                className="press ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/[0.06]"
                 onClick={(event) => {
                   event.stopPropagation();
                   setMobileOptionsOpen(true);
@@ -254,13 +253,13 @@ function SidebarSessionItem({
           <DialogContent
             aria-describedby="mobile-session-options-description"
             animationClassName="animate-bottom-sheet-content-show motion-reduce:animate-none"
-            className="bottom-0 left-0 top-auto max-w-none translate-x-0 translate-y-0 rounded-b-none rounded-t-2xl border-x-0 border-b-0 px-4 pb-safe-area-inset-bottom pt-3"
+            className="squircle bottom-0 left-0 top-auto max-w-none translate-x-0 translate-y-0 rounded-b-none rounded-t-4xl border-0 bg-card px-4 pb-safe-area-inset-bottom pt-3 shadow-floating"
           >
             <DialogTitle>Session options</DialogTitle>
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden="true" />
 
             <div className="mb-4 flex items-center gap-3 px-1">
-              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-muted">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-muted">
                 <LLMProviderLogo provider={session.__provider} className="h-5 w-5" />
               </div>
               <div className="min-w-0">
@@ -289,7 +288,7 @@ function SidebarSessionItem({
                       saveMobileRename();
                     }
                   }}
-                  className="w-full rounded-xl border-2 border-primary/40 bg-background px-3 py-3 text-foreground shadow-sm focus:border-primary focus:outline-none"
+                  className="w-full rounded-2xl bg-input px-4 py-3 text-foreground outline-none ring-2 ring-transparent focus:ring-ring/50"
                   autoFocus
                   autoComplete="off"
                   // 16px keeps iOS Safari from zooming the viewport on focus.
@@ -299,7 +298,7 @@ function SidebarSessionItem({
                   <button
                     type="button"
                     onClick={saveMobileRename}
-                    className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-transform active:scale-95"
+                    className="press flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-medium text-primary-foreground"
                   >
                     <Check className="h-5 w-5 flex-shrink-0" />
                     Save
@@ -307,7 +306,7 @@ function SidebarSessionItem({
                   <button
                     type="button"
                     onClick={onCancelEditingSession}
-                    className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-muted/35 px-4 py-3 text-sm font-medium text-foreground transition-colors active:bg-muted"
+                    className="press flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-muted px-4 py-3 text-sm font-medium text-foreground active:bg-accent"
                   >
                     <X className="h-5 w-5 flex-shrink-0" />
                     Cancel
@@ -319,7 +318,7 @@ function SidebarSessionItem({
                 <button
                   type="button"
                   onClick={startMobileRename}
-                  className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border bg-muted/35 px-4 py-3 text-left text-foreground transition-colors active:bg-muted"
+                  className="flex min-h-12 w-full items-center gap-3 rounded-2xl bg-muted px-4 py-3 text-left text-foreground active:bg-accent press-soft"
                 >
                   <Edit2 className="h-5 w-5 flex-shrink-0" />
                   <span className="text-sm font-medium">Rename session</span>
@@ -330,12 +329,12 @@ function SidebarSessionItem({
                   onClick={handleCopyAction}
                   disabled={isCopyPending}
                   className={cn(
-                    'flex min-h-12 w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors',
+                    'press-soft flex min-h-12 w-full items-center gap-3 rounded-2xl px-4 py-3 text-left',
                     copyState === 'copied'
-                      ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300'
+                      ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
                       : copyState === 'error'
-                        ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
-                        : 'border-border bg-muted/35 text-foreground active:bg-muted',
+                        ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                        : 'bg-muted text-foreground active:bg-accent',
                   )}
                 >
                   {isCopyPending ? (
@@ -353,7 +352,7 @@ function SidebarSessionItem({
 
                 {onForkSession && forkableProviders.has(session.__provider) && (
                   <button type="button" disabled={forkAction.pending} onClick={() => { void forkAction.run().then(() => setMobileOptionsOpen(false)); }}
-                    className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border bg-muted/35 px-4 py-3 text-left text-foreground disabled:opacity-50">
+                    className="press-soft flex min-h-12 w-full items-center gap-3 rounded-2xl bg-muted px-4 py-3 text-left text-foreground active:bg-accent disabled:opacity-50">
                     {forkAction.pending ? <Loader2 className="h-5 w-5 animate-spin" /> : <GitBranch className="h-5 w-5" />}
                     <span className="min-w-0"><span className="block text-sm font-medium">{t(forkAction.pending ? 'buttons.forkingSession' : 'buttons.forkSession')}</span>
                       <span className="block text-xs text-muted-foreground">{t('messages.forkCompletedHistory')}</span></span>
@@ -366,7 +365,7 @@ function SidebarSessionItem({
                       setMobileOptionsOpen(false);
                       requestDeleteSession();
                     }}
-                    className="flex min-h-12 w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-red-600 transition-colors active:bg-red-500/10 dark:text-red-400"
+                    className="press-soft flex min-h-12 w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-red-600 active:bg-red-500/10 dark:text-red-400"
                   >
                     <Trash2 className="h-5 w-5 flex-shrink-0" />
                     <span className="text-sm font-medium">Archive or delete session</span>
@@ -379,7 +378,7 @@ function SidebarSessionItem({
               <button
                 type="button"
                 onClick={() => setMobileOptionsOpen(false)}
-                className="mb-3 mt-2 min-h-11 w-full rounded-xl text-sm font-medium text-muted-foreground transition-colors active:bg-muted"
+                className="press-soft mb-3 mt-2 min-h-11 w-full rounded-full text-sm font-medium text-muted-foreground active:bg-muted"
               >
                 Cancel
               </button>
@@ -398,15 +397,14 @@ function SidebarSessionItem({
           aria-disabled={isSelecting && !isSelectable ? true : undefined}
           className={cn(
             buttonVariants({ variant: 'ghost' }),
-            'h-auto w-full justify-start rounded-md border bg-card p-2 text-left font-normal transition-all duration-150',
+            'press-soft squircle h-auto w-full justify-start rounded-xl px-2 py-2 text-left font-normal',
             isSelecting ? 'pr-2' : 'pr-11',
-            isSelected ? 'border-primary/20 bg-primary/5' : 'border-border/30',
-            !isSelected && isProcessing
-              ? 'border-border/60 bg-muted/20 hover:bg-muted/25'
-              : !isSelected && sessionView.isActive
-                ? 'border-green-500/30 bg-green-50/5 hover:bg-green-50/10 dark:bg-green-900/5 dark:hover:bg-green-900/10'
-                : 'hover:bg-accent/50',
-            isChecked && 'border-primary/40 bg-primary/10',
+            isSelected
+              ? 'bg-primary-container text-primary-container-foreground hover:bg-primary-container'
+              : isProcessing
+                ? 'bg-foreground/[0.04] hover:bg-foreground/[0.06]'
+                : 'hover:bg-foreground/[0.05]',
+            isChecked && 'bg-primary-container ring-1 ring-primary/30',
           )}
           // Left-click keeps in-app navigation; Ctrl/Cmd/middle-click and the
           // native right-click menu use the href to open a new tab/window.
@@ -430,8 +428,8 @@ function SidebarSessionItem({
             {selectionIcon}
             <div
               className={cn(
-                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
+                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full',
+                isSelected ? 'bg-card/70' : 'bg-foreground/[0.06]',
               )}
             >
               <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
@@ -439,7 +437,7 @@ function SidebarSessionItem({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <div
-                  className="min-w-0 flex-1 truncate text-sm font-normal text-foreground"
+                  className="min-w-0 flex-1 truncate text-sm font-normal"
                   title={sessionView.sessionName}
                   onDoubleClick={(event) => {
                     if (isSelecting || isEditing || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;

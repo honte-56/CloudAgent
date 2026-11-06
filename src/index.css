@@ -21,40 +21,77 @@
   }
 }
 
+/*
+ * CloudCLI design tokens.
+ *
+ * The UI is built from tonal layers rather than outlines: every surface is a
+ * step on one neutral ramp tinted by the seed blue (#007AFF), so hierarchy reads
+ * from tone first and borders stay hairline. The steps, from back to front:
+ *
+ *   chrome      the canvas behind everything; the sidebar sits directly on it
+ *   background  the content panel (chat, files, shell) laid over the chrome
+ *   card        raised content on the panel: the composer, popovers, dialogs
+ *   muted       blocks inside a card or panel: chips, code, selected rows
+ *   input       inset fields and wells
+ *
+ * Light mode brightens as a layer comes forward; dark mode lifts each layer a
+ * few points of lightness and never steps back down, so a popover over a card
+ * is always the lighter of the two.
+ */
 @layer base {
   :root {
-    --background: 44 22% 96%;
-    --foreground: 36 25% 4%;
+    --chrome: 220 24% 93%;
+    --chrome-foreground: 222 14% 30%;
+    --background: 220 33% 98.5%;
+    --foreground: 222 22% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 36 25% 4%;
+    --card-foreground: 222 22% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 36 25% 4%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 44 15% 91%;
-    --secondary-foreground: 36 15% 18%;
-    --muted: 44 15% 91%;
-    --muted-foreground: 40 5% 44%;
-    --accent: 44 15% 91%;
-    --accent-foreground: 36 15% 18%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 44 14% 87%;
-    --input: 44 14% 87%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --popover-foreground: 222 22% 11%;
+    --primary: 212 100% 47%;
+    --primary-foreground: 0 0% 100%;
+    /* Tonal accent for selected rows, the user's bubble and tonal buttons. */
+    --primary-container: 214 100% 93.5%;
+    --primary-container-foreground: 216 82% 22%;
+    --secondary: 220 24% 94.5%;
+    --secondary-foreground: 222 18% 20%;
+    --muted: 220 24% 94.5%;
+    --muted-foreground: 220 9% 44%;
+    --accent: 220 26% 92.5%;
+    --accent-foreground: 222 18% 16%;
+    --destructive: 2 76% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 20% 89.5%;
+    --input: 220 22% 91.5%;
+    --ring: 212 100% 47%;
+    --radius: 0.75rem;
 
-    /* Nav design tokens */
-    --nav-glass-bg: 44 22% 96% / 0.7;
-    --nav-glass-blur: 20px;
-    --nav-glass-saturate: 1.8;
-    --nav-tab-glow: 221.2 83.2% 53.3% / 0.18;
-    --nav-tab-ring: 221.2 83.2% 53.3% / 0.10;
-    --nav-float-shadow: 0 0% 0% / 0.06;
-    --nav-float-ring: 44 14% 87% / 0.5;
-    --nav-divider-color: 44 14% 87% / 0.5;
-    --nav-input-bg: 44 15% 91% / 0.5;
-    --nav-input-focus-ring: 221.2 83.2% 53.3% / 0.22;
+    /* Elevation is soft and colored by the ramp, never pure black. */
+    --shadow-color: 222 40% 20%;
+    --shadow-raised: 0 1px 2px hsl(var(--shadow-color) / 0.05), 0 4px 16px -4px hsl(var(--shadow-color) / 0.08);
+    --shadow-floating: 0 2px 6px hsl(var(--shadow-color) / 0.06), 0 16px 40px -8px hsl(var(--shadow-color) / 0.18);
+    --scrim: 222 30% 8% / 0.32;
+
+    /*
+     * Motion. The spring curves are sampled from damped springs (stiffness
+     * (2π/d)², damping 4π(1-bounce)/d) and must run for their paired duration,
+     * which is the time the spring takes to settle within 0.4% of its target.
+     *   smooth  d=0.30 bounce=0     page and drawer moves, nothing overshoots
+     *   snappy  d=0.40 bounce=0.15  indicators that travel between positions
+     *   bouncy  d=0.50 bounce=0.32  things that pop into place: dialogs, menus
+     *   press   d=0.26 bounce=0.18  the elastic release of a pressed control
+     */
+    --spring-smooth: linear(0, 0.043, 0.138, 0.252, 0.371, 0.479, 0.575, 0.659, 0.728, 0.784, 0.831, 0.868, 0.897, 0.921, 0.939, 0.953, 0.964, 0.972, 0.979, 0.984, 0.988, 0.991, 0.993, 0.995, 1);
+    --spring-smooth-duration: 370ms;
+    --spring-snappy: linear(0, 0.038, 0.128, 0.241, 0.363, 0.478, 0.585, 0.678, 0.756, 0.82, 0.87, 0.91, 0.94, 0.962, 0.978, 0.989, 0.997, 1.002, 1.004, 1.006, 1.006, 1.006, 1.005, 1.005, 1);
+    --spring-snappy-duration: 450ms;
+    --spring-bouncy: linear(0, 0.038, 0.129, 0.252, 0.386, 0.519, 0.642, 0.75, 0.839, 0.911, 0.965, 1.004, 1.03, 1.045, 1.053, 1.054, 1.051, 1.045, 1.039, 1.031, 1.024, 1.018, 1.012, 1.008, 1);
+    --spring-bouncy-duration: 550ms;
+    --spring-press: linear(0, 0.041, 0.137, 0.259, 0.387, 0.51, 0.618, 0.713, 0.791, 0.854, 0.902, 0.939, 0.965, 0.984, 0.996, 1.004, 1.008, 1.01, 1.011, 1.01, 1.009, 1.008, 1.006, 1.005, 1);
+    --spring-press-duration: 300ms;
+    /* Non-spring easings for fades and exits, which should never overshoot. */
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
 
     /* Safe area CSS variables */
     --safe-area-inset-top: env(safe-area-inset-top);
@@ -62,18 +99,22 @@
     --safe-area-inset-bottom: env(safe-area-inset-bottom);
     --safe-area-inset-left: env(safe-area-inset-left);
 
-    /* Mobile navigation dimensions - Single source of truth */
-    /* Floating nav: ~52px bar + 8px bottom margin + 12px px-3 top spacing */
-    --mobile-nav-height: 52px;
-    --mobile-nav-padding: 20px;
-    --mobile-nav-total: calc(var(--mobile-nav-height) + var(--mobile-nav-padding) + env(safe-area-inset-bottom, 0px));
-
     /* Header safe area dimensions */
     --header-safe-area-top: env(safe-area-inset-top, 0px);
     --header-base-padding: 8px;
     --header-total-padding: calc(var(--header-safe-area-top) + var(--header-base-padding));
   }
-  
+
+  /* Browsers without linear() fall back to curves with the same character. */
+  @supports not (transition-timing-function: linear(0, 1)) {
+    :root {
+      --spring-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+      --spring-snappy: cubic-bezier(0.2, 0.9, 0.3, 1.04);
+      --spring-bouncy: cubic-bezier(0.34, 1.36, 0.64, 1);
+      --spring-press: cubic-bezier(0.3, 1.2, 0.5, 1);
+    }
+  }
+
   /* Fallback for older iOS versions */
   @supports (padding-top: constant(safe-area-inset-top)) {
     :root {
@@ -85,37 +126,34 @@
   }
 
   .dark {
-    --background: 0 0% 8%;
-    --foreground: 40 8% 93%;
-    --card: 0 0% 12%;
-    --card-foreground: 40 8% 93%;
-    --popover: 0 0% 12%;
-    --popover-foreground: 40 8% 93%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 0 0% 8%;
-    --secondary: 0 0% 17%;
-    --secondary-foreground: 40 8% 93%;
-    --muted: 0 0% 17%;
-    --muted-foreground: 0 0% 60%;
-    --accent: 0 0% 17%;
-    --accent-foreground: 40 8% 93%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 40 8% 93%;
-    --border: 0 0% 17%;
-    --input: 0 0% 23%;
-    --ring: 217.2 91.2% 59.8%;
+    --chrome: 222 10% 6%;
+    --chrome-foreground: 220 8% 72%;
+    --background: 222 9% 9.5%;
+    --foreground: 220 14% 93%;
+    --card: 222 9% 13%;
+    --card-foreground: 220 14% 93%;
+    --popover: 222 9% 15%;
+    --popover-foreground: 220 14% 93%;
+    --primary: 213 100% 70%;
+    --primary-foreground: 218 70% 12%;
+    --primary-container: 215 46% 22%;
+    --primary-container-foreground: 214 100% 89%;
+    --secondary: 222 8% 17%;
+    --secondary-foreground: 220 14% 93%;
+    --muted: 222 8% 17%;
+    --muted-foreground: 220 7% 62%;
+    --accent: 222 8% 19.5%;
+    --accent-foreground: 220 14% 95%;
+    --destructive: 2 72% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 8% 19%;
+    --input: 222 8% 21%;
+    --ring: 213 100% 70%;
 
-    /* Nav design tokens — dark overrides */
-    --nav-glass-bg: 0 0% 12% / 0.55;
-    --nav-glass-blur: 24px;
-    --nav-glass-saturate: 1.6;
-    --nav-tab-glow: 217.2 91.2% 59.8% / 0.25;
-    --nav-tab-ring: 217.2 91.2% 59.8% / 0.15;
-    --nav-float-shadow: 0 0% 0% / 0.35;
-    --nav-float-ring: 0 0% 17% / 0.3;
-    --nav-divider-color: 0 0% 17% / 0.5;
-    --nav-input-bg: 0 0% 17% / 0.5;
-    --nav-input-focus-ring: 217.2 91.2% 59.8% / 0.25;
+    --shadow-color: 222 40% 2%;
+    --shadow-raised: 0 1px 2px hsl(var(--shadow-color) / 0.3), 0 4px 16px -4px hsl(var(--shadow-color) / 0.35);
+    --shadow-floating: 0 2px 6px hsl(var(--shadow-color) / 0.35), 0 16px 40px -8px hsl(var(--shadow-color) / 0.6);
+    --scrim: 222 30% 2% / 0.55;
   }
 }
 
@@ -129,7 +167,7 @@
   body {
     @apply bg-background text-foreground;
 
-    font-family: "Encode Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    @apply font-sans;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
@@ -183,15 +221,22 @@
     bottom: 0;
   }
   
-  /* Global transition defaults */
-  button, 
-  a, 
-  input, 
-  textarea, 
+  /* Global transition defaults. Layout properties are deliberately left out:
+     animating width or padding on every control makes resizes and focus rings
+     smear, and components that do move animate it explicitly. */
+  button,
+  a,
+  input,
+  textarea,
   select,
-  [role="button"],
+  [role="button"] {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 160ms;
+    transition-timing-function: var(--ease-standard);
+  }
+
   .transition-all {
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 160ms var(--ease-standard);
   }
   
   /* Color transitions for theme switching - exclude interactive elements */
@@ -239,71 +284,24 @@
 }
 
 @layer utilities {
-  /* Smooth hover transitions for interactive elements */
-  button:hover,
-  a:hover,
-  [role="button"]:hover {
-    transition-duration: 100ms;
-  }
-  
-  /* Active state transitions */
-  button:active,
-  a:active,
-  [role="button"]:active {
-    transition-duration: 50ms;
-  }
-  
-  /* Focus transitions */
-  button:focus-visible,
-  a:focus-visible,
-  input:focus-visible,
-  textarea:focus-visible,
-  select:focus-visible {
-    transition: outline-offset 150ms ease-out, box-shadow 150ms ease-out;
-  }
-  
-  /* Sidebar transitions */
-  .sidebar-transition {
-    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
-                opacity 300ms ease-in-out;
-  }
-
-  /* Nav glass surface — uses theme tokens */
-  .nav-glass {
-    background: hsl(var(--nav-glass-bg));
-    backdrop-filter: blur(var(--nav-glass-blur)) saturate(var(--nav-glass-saturate));
-    -webkit-backdrop-filter: blur(var(--nav-glass-blur)) saturate(var(--nav-glass-saturate));
-  }
-
-  /* Nav tab active pill glow — uses theme tokens */
-  .nav-tab-active {
-    box-shadow: 0 1px 8px hsl(var(--nav-tab-glow)),
-                0 0 0 1px hsl(var(--nav-tab-ring));
-  }
-
-  /* Floating mobile nav bar — uses theme tokens */
-  .mobile-nav-float {
-    box-shadow: 0 -1px 20px hsl(var(--nav-float-shadow)),
-                0 0 0 1px hsl(var(--nav-float-ring));
-  }
-
-  /* Subtle sidebar divider — uses theme tokens */
+  /* Hairline divider that fades out toward both ends. */
   .nav-divider {
     height: 1px;
-    background: linear-gradient(90deg, transparent, hsl(var(--nav-divider-color)) 20%, hsl(var(--nav-divider-color)) 80%, transparent);
+    background: linear-gradient(90deg, transparent, hsl(var(--border)) 16%, hsl(var(--border)) 84%, transparent);
   }
 
-  /* Nav search input surface — uses theme tokens */
+  /* Sidebar search field: an inset well that lifts to a card when focused. */
   .nav-search-input {
-    background: hsl(var(--nav-input-bg));
+    background: hsl(var(--input) / 0.7);
     border: none;
   }
 
-  .nav-search-input:focus-within {
-    background: hsl(var(--background));
-    box-shadow: 0 0 0 2px hsl(var(--nav-input-focus-ring));
+  .nav-search-input:focus-within,
+  .nav-search-input:focus {
+    background: hsl(var(--card));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.28);
   }
-  
+
   /* Modal and dropdown transitions */
   .modal-transition {
     transition: opacity 200ms ease-in-out,
@@ -441,125 +439,33 @@
     color-scheme: light dark;
   }
   
+  /* Dark-mode textareas take their colors from the theme. The !important
+     flags guard against iOS Safari's autofill and dark-mode form styling,
+     which otherwise paint textarea text and fill on their own. */
   .dark textarea {
-    color: rgb(243 244 246) !important; /* gray-100 */
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-    caret-color: rgb(243 244 246) !important;
+    color: hsl(var(--foreground)) !important;
+    -webkit-text-fill-color: hsl(var(--foreground)) !important;
+    caret-color: hsl(var(--primary)) !important;
   }
-  
-  /* Fix for focus state in dark mode */
-  .dark textarea:focus {
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix for iOS/Safari dark mode textarea issues */
+
   @supports (-webkit-touch-callout: none) {
-    .dark textarea {
+    .dark textarea.bg-transparent {
       background-color: transparent !important;
-      color: rgb(243 244 246) !important;
-      -webkit-text-fill-color: rgb(243 244 246) !important;
-    }
-    
-    .dark textarea:focus {
-      background-color: transparent !important;
-      color: rgb(243 244 246) !important;
-      -webkit-text-fill-color: rgb(243 244 246) !important;
     }
   }
-  
-  /* Ensure parent container doesn't override textarea styles */
-  .dark .bg-gray-800 textarea {
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix focus-within container issues in dark mode */
-  .dark .focus-within\:ring-2:focus-within {
-    background-color: rgb(20 20 20) !important;
-  }
-  
-  /* Ensure textarea remains transparent with visible text */
-  .dark textarea.bg-transparent {
-    background-color: transparent !important;
-    color: rgb(243 244 246) !important;
-    -webkit-text-fill-color: rgb(243 244 246) !important;
-  }
-  
-  /* Fix placeholder text color to be properly gray */
+
   textarea::placeholder {
-    color: rgb(156 163 175) !important; /* gray-400 */
+    color: hsl(var(--muted-foreground) / 0.75) !important;
     opacity: 1 !important;
   }
-  
+
   .dark textarea::placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-  }
-  
-  /* More specific selector for chat input textarea */
-  .dark .bg-gray-800 textarea::placeholder,
-  .dark textarea.bg-transparent::placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
-  }
-  
-  /* Custom class for chat input placeholder */
-  .chat-input-placeholder::placeholder {
-    color: rgb(156 163 175) !important;
+    color: hsl(var(--muted-foreground) / 0.65) !important;
+    -webkit-text-fill-color: hsl(var(--muted-foreground) / 0.65) !important;
     opacity: 1 !important;
   }
 
-  .dark .chat-input-placeholder::placeholder {
-    color: rgb(75 85 99) !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
-  }
-
-  .chat-input-placeholder::-webkit-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
-  }
-
-  .dark .chat-input-placeholder::-webkit-input-placeholder {
-    color: rgb(75 85 99) !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: rgb(75 85 99) !important;
-  }
-  
-  /* WebKit specific placeholder styles */
-  textarea::-webkit-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
-  }
-  
-  .dark textarea::-webkit-input-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-  }
-  
-  /* Mozilla specific placeholder styles */
-  textarea::-moz-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
-  }
-  
-  .dark textarea::-moz-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-  }
-  
-  /* IE/Edge specific placeholder styles */
-  textarea:-ms-input-placeholder {
-    color: rgb(156 163 175) !important;
-    opacity: 1 !important;
-  }
-  
-  .dark textarea:-ms-input-placeholder {
-    color: rgb(75 85 99) !important; /* gray-600 - darker gray */
-    opacity: 1 !important;
-  }
+  /* The composer's placeholder shares the textarea placeholder tone above. */
 }
 
 /* Mobile optimizations and components */
@@ -1012,5 +918,139 @@
       outline-offset: 4px;
       background-color: transparent;
     }
+  }
+}
+
+/*
+ * Shape and motion primitives shared by every module.
+ */
+@layer components {
+  /* Continuous corners, as on FlClash's superellipse surfaces, wherever the
+     browser can draw them; elsewhere the plain radius is kept. */
+  @supports (corner-shape: superellipse(1.5)) {
+    .squircle {
+      corner-shape: superellipse(1.5);
+    }
+  }
+
+  /* Elastic press: sinks quickly under the pointer, then springs back past its
+     rest size on release. Use .press on compact controls and .press-soft on
+     wide surfaces such as list rows, where a full sink would look heavy.
+     The independent `scale` property is used so the press composes with any
+     translate or rotate a component already applies through `transform`. */
+  .press,
+  .press-soft {
+    transition-property: scale, color, background-color, border-color, box-shadow, opacity;
+    transition-duration: var(--spring-press-duration), 160ms, 160ms, 160ms, 160ms, 160ms;
+    transition-timing-function: var(--spring-press), var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-standard), var(--ease-standard);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .press:active:not(:disabled):not([aria-disabled="true"]) {
+    scale: 0.94;
+    transition-duration: 80ms;
+    transition-timing-function: var(--ease-standard);
+  }
+
+  .press-soft:active:not(:disabled):not([aria-disabled="true"]) {
+    scale: 0.985;
+    transition-duration: 80ms;
+    transition-timing-function: var(--ease-standard);
+  }
+
+  /*
+   * Mobile sidebar drawer. useSidebarDrawerGesture writes --drawer-progress
+   * (0 closed … 1 open) on the workspace root; the panel slides with it, the
+   * scrim deepens and the main layer recedes a little to the right, the way a
+   * covered page shifts back under a pushed one. While a finger drags, the
+   * values follow it without transitions; on release they spring to rest.
+   */
+  .workspace-drawer {
+    visibility: hidden;
+    pointer-events: none;
+    transition: visibility 0s linear var(--spring-smooth-duration);
+  }
+
+  .workspace-drawer[data-open="true"],
+  [data-drawer-dragging] .workspace-drawer {
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+
+  .workspace-drawer-panel {
+    transform: translate3d(calc((var(--drawer-progress, 0) - 1) * 100%), 0, 0);
+    transition: transform var(--spring-smooth-duration) var(--spring-smooth);
+    will-change: transform;
+  }
+
+  .workspace-drawer-scrim {
+    opacity: var(--drawer-progress, 0);
+    transition: opacity var(--spring-smooth-duration) var(--ease-standard);
+  }
+
+  [data-drawer-active] > .workspace-main-layer {
+    transform: translate3d(calc(var(--drawer-progress, 0) * 56px), 0, 0);
+    transition: transform var(--spring-smooth-duration) var(--spring-smooth);
+  }
+
+  [data-drawer-dragging] .workspace-drawer-panel,
+  [data-drawer-dragging] .workspace-drawer-scrim,
+  [data-drawer-dragging] > .workspace-main-layer {
+    transition: none;
+  }
+
+  /*
+   * Entry animations for the `animate-in` class family used across modules
+   * (originally from tailwindcss-animate, which this project does not ship).
+   * Plain `animate-in` fades; with `zoom-in-95` a floating surface pops out of
+   * its anchor on the bouncy spring; with `slide-in-from-bottom-2` a toast rises.
+   */
+  .animate-in {
+    animation: fade-in 200ms var(--ease-standard) backwards;
+  }
+
+  .animate-in.zoom-in-95 {
+    animation: pop-in var(--spring-bouncy-duration) var(--spring-bouncy) backwards;
+  }
+
+  .animate-in.slide-in-from-bottom-2 {
+    animation: rise-in var(--spring-smooth-duration) var(--spring-smooth) backwards;
+  }
+
+  /* The workspace view that just became visible. */
+  .view-enter {
+    animation: fade-through var(--spring-smooth-duration) var(--spring-smooth) backwards;
+  }
+}
+
+@keyframes fade-through {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
   }
 }

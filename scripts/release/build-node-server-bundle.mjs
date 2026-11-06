@@ -32,7 +32,7 @@ function run(command, args, cwd = stage) {
 
 // An explicit input list excludes development configuration, credentials,
 // databases and logs. Runtime data remains on the server outside the package.
-for (const entry of ['dist', 'dist-server', 'public', 'shared', 'scripts/fix-node-pty.js', 'package-lock.json']) {
+for (const entry of ['dist', 'dist-server', 'public', 'shared', 'scripts/fix-node-pty.js', 'scripts/promote-dist-server.mjs', 'package-lock.json']) {
   await fs.cp(path.join(root, entry), path.join(stage, entry), { recursive: true });
 }
 const scripts = { ...manifest.scripts };
@@ -43,6 +43,7 @@ await fs.writeFile(path.join(stage, 'package.json'), `${JSON.stringify({ ...mani
 // Dependency install scripts build or download native modules for Node.js,
 // including SQLite, the PTY and ripgrep; no compilation runs on the server.
 await run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund']);
+await run('npm', ['run', 'preserver']);
 await run(process.execPath, ['--input-type=module', '-e', `
   import Database from 'better-sqlite3';
   import pty from 'node-pty';

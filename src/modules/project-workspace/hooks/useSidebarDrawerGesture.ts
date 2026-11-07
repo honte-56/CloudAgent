@@ -1,46 +1,33 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
-// Movement before the gesture commits to a direction.
 const DRAG_SLOP_PX = 10;
-// A release faster than this settles in the direction of travel regardless of
-// how far the drawer had moved; slower releases settle to the nearer side.
 const FLING_VELOCITY_PX_PER_MS = 0.35;
-// Only the last stretch of a drag says how fast it was released.
 const VELOCITY_WINDOW_MS = 90;
-// The smooth spring settles in 370ms; the receding main layer keeps its
-// transform until then so the close animation can play out.
+// Allows the 370ms spring to finish before releasing the main layer's transform.
 const SETTLE_MS = 420;
 const FALLBACK_DRAWER_WIDTH_PX = 320;
 
 type SidebarDrawerGestureOptions = {
-  /** Only the mobile drawer is draggable; the docked desktop sidebar is not. */
   enabled: boolean;
   open: boolean;
   setOpen: (open: boolean) => void;
-  /**
-   * Receives the `--drawer-progress` variable (0 closed … 1 open) and the
-   * `data-drawer-*` attributes that the drawer, scrim and main layer style from.
-   */
+  /** Workspace boundary for touch events; motion styles never go on this ancestor. */
   rootRef: RefObject<HTMLElement | null>;
-  /** The sliding panel, measured for the drag distance. */
   panelRef: RefObject<HTMLElement | null>;
 };
 
 type DragSample = { x: number; time: number };
-
 type DrawerDrag = {
   startX: number;
   startY: number;
   startProgress: number;
+  progress: number;
   width: number;
   dragging: boolean;
   samples: DragSample[];
 };
 
-type TimerRef = { current: number | null };
-
-// Start anywhere in the main content, away from Android's system back gesture.
 // Editors, controls, overlays and horizontally scrollable content keep their touches.
 function canStartOpeningDrawer(target: EventTarget | null, root: HTMLElement) {
   if (!(target instanceof Element)) return false;
@@ -57,156 +44,166 @@ function canStartOpeningDrawer(target: EventTarget | null, root: HTMLElement) {
   return true;
 }
 
-// Moves the drawer to a resting side. The main layer only carries a transform
-// while the drawer is out (or on its way in), because a lingering transform
-// would become the containing block of every fixed-position descendant.
-function settleDrawer(root: HTMLElement, toOpen: boolean, settleTimerRef: TimerRef) {
-  if (settleTimerRef.current !== null) {
-    window.clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = null;
-  }
-  root.dataset.drawerActive = 'true';
-  root.style.setProperty('--drawer-progress', toOpen ? '1' : '0');
-  if (!toOpen) {
-    settleTimerRef.current = window.setTimeout(() => {
-      settleTimerRef.current = null;
-      delete root.dataset.drawerActive;
-    }, SETTLE_MS);
-  }
+// Read the actual compositor position when catching a spring mid-flight, rather
+// than restarting from React's fully-open/closed destination. This read is once
+// at touchstart; touchmove never reads layout or computed styles.
+function readProgress(panel: HTMLElement, width: number, fallback: number) {
+  const transform = window.getComputedStyle(panel).transform;
+  const match = transform.match(/^matrix(3d)?\((.+)\)$/);
+  if (!match) return fallback;
+  const values = match[2].split(',').map(Number);
+  const x = values[match[1] ? 12 : 4];
+  return Number.isFinite(x) ? Math.min(1, Math.max(0, 1 + x / width)) : fallback;
 }
 
-/**
- * Drives the mobile sidebar drawer like a physical sheet: a right swipe pulls it
- * out, a swipe on the open drawer or its scrim pushes it back, and the drawer
- * follows the finger 1:1 before springing to whichever side the release favours.
- */
-export function useSidebarDrawerGesture({
-  enabled,
-  open,
-  setOpen,
-  rootRef,
-  panelRef,
-}: SidebarDrawerGestureOptions) {
-  // Read by the native listeners, which are bound once per enable and would
-  // otherwise see the open state from when they were attached.
+/** Used by ProjectSidebarRegion for frame-paced drag motion and immediate release into its CSS spring. */
+export function useSidebarDrawerGesture({ enabled, open, setOpen, rootRef, panelRef }: SidebarDrawerGestureOptions) {
+  // Native listeners keep the latest committed state without reattaching mid-drag.
   const openRef = useRef(open);
-  const settleTimerRef = useRef<number | null>(null);
+  const setOpenRef = useRef(setOpen);
+  // Owns the imperative animation for this mounted mobile panel, independently of React commits.
+  const motionRef = useRef<{ syncOpen(value: boolean): void } | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     openRef.current = open;
-  }, [open]);
+    setOpenRef.current = setOpen;
+  }, [open, setOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root) return;
-    if (!enabled) {
-      root.style.removeProperty('--drawer-progress');
-      delete root.dataset.drawerActive;
-      delete root.dataset.drawerDragging;
-      return;
-    }
-    settleDrawer(root, open, settleTimerRef);
-  }, [enabled, open, rootRef]);
-
-  useEffect(() => () => {
-    if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root || !enabled) return;
-
+    const panel = panelRef.current;
+    const layer = panel?.parentElement;
+    if (!enabled || !root || !panel || !layer) return;
+    const scrim = layer.querySelector<HTMLElement>('.workspace-drawer-scrim');
+    const main = root.querySelector<HTMLElement>(':scope > .workspace-main-layer');
+    let targetOpen = openRef.current;
+    let paintedProgress = targetOpen ? 1 : 0;
     let drag: DrawerDrag | null = null;
+    let frame: number | null = null;
+    let settleTimer: number | null = null;
+
+    const cancelFrame = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+    };
+    const clearSettleTimer = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = null;
+    };
+    const paint = (progress: number) => {
+      paintedProgress = progress;
+      // An inherited custom property on the workspace used to invalidate styles
+      // throughout the transcript on every touchmove. Touch only these three layers.
+      panel.style.transform = `translate3d(${(progress - 1) * 100}%, 0, 0)`;
+      if (scrim) scrim.style.opacity = String(progress);
+      if (main) main.style.transform = `translate3d(${progress * 56}px, 0, 0)`;
+    };
+    const markDragging = (value: boolean) => {
+      if (value) {
+        layer.dataset.drawerDragging = 'true';
+        if (main) main.dataset.drawerDragging = 'true';
+      } else {
+        delete layer.dataset.drawerDragging;
+        if (main) delete main.dataset.drawerDragging;
+      }
+    };
+    const releaseMain = () => {
+      main?.style.removeProperty('transform');
+      if (main) delete main.dataset.drawerActive;
+    };
+    const settle = (toOpen: boolean) => {
+      cancelFrame();
+      clearSettleTimer();
+      drag = null;
+      targetOpen = toOpen;
+      layer.dataset.drawerVisible = 'true';
+      if (main) main.dataset.drawerActive = 'true';
+      markDragging(false);
+      // Start the transition now, before setOpen triggers any React work.
+      // Unpainted moves are discarded so the spring starts at the last visible frame.
+      paint(toOpen ? 1 : 0);
+      if (!toOpen) {
+        settleTimer = window.setTimeout(() => {
+          settleTimer = null;
+          delete layer.dataset.drawerVisible;
+          releaseMain();
+        }, SETTLE_MS);
+      }
+    };
+
+    paint(paintedProgress);
+    if (targetOpen) {
+      layer.dataset.drawerVisible = 'true';
+      if (main) main.dataset.drawerActive = 'true';
+    } else {
+      releaseMain();
+    }
+    motionRef.current = {
+      syncOpen(value) {
+        if (targetOpen !== value) settle(value);
+      },
+    };
 
     const cancelDrag = () => {
       const wasDragging = drag?.dragging;
       drag = null;
-      delete root.dataset.drawerDragging;
-      if (wasDragging) settleDrawer(root, openRef.current, settleTimerRef);
+      if (wasDragging) settle(openRef.current);
     };
-
-    const endDrag = () => {
+    const endDrag = (event: TouchEvent) => {
       const finished = drag;
       drag = null;
       if (!finished?.dragging) return;
-      delete root.dataset.drawerDragging;
-
-      const progress = Number.parseFloat(root.style.getPropertyValue('--drawer-progress')) || 0;
       const first = finished.samples[0];
       const last = finished.samples[finished.samples.length - 1];
-      const elapsed = first && last ? last.time - first.time : 0;
-      const velocity = elapsed > 0 ? (last.x - first.x) / elapsed : 0;
-      const shouldOpen = Math.abs(velocity) > FLING_VELOCITY_PX_PER_MS ? velocity > 0 : progress > 0.5;
-
-      if (shouldOpen === openRef.current) {
-        // The state is unchanged, so no effect will run; spring back by hand.
-        settleDrawer(root, shouldOpen, settleTimerRef);
-      } else {
-        setOpen(shouldOpen);
-      }
+      const elapsed = last.time - first.time;
+      const velocity = elapsed > 0 && event.timeStamp - last.time <= VELOCITY_WINDOW_MS
+        ? (last.x - first.x) / elapsed : 0;
+      const shouldOpen = Math.abs(velocity) > FLING_VELOCITY_PX_PER_MS ? velocity > 0 : finished.progress > 0.5;
+      settle(shouldOpen);
+      if (shouldOpen !== openRef.current) setOpenRef.current(shouldOpen);
     };
-
     const handleTouchStart = (event: TouchEvent) => {
       cancelDrag();
-      if (event.touches.length !== 1) {
-        return;
-      }
+      if (event.touches.length !== 1) return;
+      const inDrawer = event.target instanceof Node && layer.contains(event.target);
+      if (openRef.current && !inDrawer) return;
+      if (!openRef.current && !(inDrawer && layer.dataset.drawerVisible) && !canStartOpeningDrawer(event.target, root)) return;
       const touch = event.touches[0];
-      const isOpen = openRef.current;
-      const drawerLayer = panelRef.current?.parentElement;
-      if (!isOpen && !canStartOpeningDrawer(event.target, root)) return;
-      if (isOpen && !(drawerLayer && event.target instanceof Node && drawerLayer.contains(event.target))) return;
-
+      const width = panel.getBoundingClientRect().width || FALLBACK_DRAWER_WIDTH_PX;
+      const progress = readProgress(panel, width, paintedProgress);
       drag = {
-        startX: touch.clientX,
-        startY: touch.clientY,
-        startProgress: isOpen ? 1 : 0,
-        width: panelRef.current?.getBoundingClientRect().width || FALLBACK_DRAWER_WIDTH_PX,
-        dragging: false,
+        startX: touch.clientX, startY: touch.clientY, startProgress: progress,
+        progress, width, dragging: false,
         samples: [{ x: touch.clientX, time: event.timeStamp }],
       };
     };
-
     const handleTouchMove = (event: TouchEvent) => {
       if (!drag) return;
-      if (event.touches.length !== 1) {
-        cancelDrag();
-        return;
-      }
+      if (event.touches.length !== 1) { cancelDrag(); return; }
       const touch = event.touches[0];
-      if (!touch) return;
       const dx = touch.clientX - drag.startX;
       const dy = touch.clientY - drag.startY;
-
       if (!drag.dragging) {
         if (Math.abs(dx) < DRAG_SLOP_PX && Math.abs(dy) < DRAG_SLOP_PX) return;
         const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.2;
-        const movesTowardOtherSide = drag.startProgress === 1 ? dx < 0 : dx > 0;
-        // Vertical intent, or a push against the side the drawer is already
-        // on, leaves the touch to scrolling and the content underneath.
-        if (!isHorizontal || !movesTowardOtherSide) {
-          drag = null;
-          return;
-        }
+        const movesTowardOtherSide = drag.startProgress <= 0 ? dx > 0 : drag.startProgress >= 1 ? dx < 0 : true;
+        if (!isHorizontal || !movesTowardOtherSide) { drag = null; return; }
         drag.dragging = true;
-        if (settleTimerRef.current !== null) {
-          window.clearTimeout(settleTimerRef.current);
-          settleTimerRef.current = null;
-        }
-        root.dataset.drawerActive = 'true';
-        root.dataset.drawerDragging = 'true';
+        clearSettleTimer();
+        layer.dataset.drawerVisible = 'true';
+        if (main) main.dataset.drawerActive = 'true';
+        markDragging(true);
       }
-
-      // Once the drawer owns the gesture the list under the finger must not
-      // scroll along with it.
       if (event.cancelable) event.preventDefault();
-      const progress = Math.min(1, Math.max(0, drag.startProgress + dx / drag.width));
-      root.style.setProperty('--drawer-progress', progress.toFixed(4));
-
+      drag.progress = Math.min(1, Math.max(0, drag.startProgress + dx / drag.width));
       drag.samples.push({ x: touch.clientX, time: event.timeStamp });
-      while (drag.samples.length > 2 && event.timeStamp - drag.samples[0].time > VELOCITY_WINDOW_MS) {
-        drag.samples.shift();
-      }
+      while (drag.samples.length > 2 && event.timeStamp - drag.samples[0].time > VELOCITY_WINDOW_MS) drag.samples.shift();
+      // Touch delivery can exceed the display refresh rate. Paint only the newest
+      // position once per frame, with no React renders in the move path.
+      if (frame === null) frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (drag?.dragging) paint(drag.progress);
+      });
     };
 
     root.addEventListener('touchstart', handleTouchStart, { passive: true });
@@ -214,11 +211,22 @@ export function useSidebarDrawerGesture({
     root.addEventListener('touchend', endDrag);
     root.addEventListener('touchcancel', cancelDrag);
     return () => {
+      cancelFrame();
+      clearSettleTimer();
+      motionRef.current = null;
       root.removeEventListener('touchstart', handleTouchStart);
       root.removeEventListener('touchmove', handleTouchMove);
       root.removeEventListener('touchend', endDrag);
       root.removeEventListener('touchcancel', cancelDrag);
-      delete root.dataset.drawerDragging;
+      markDragging(false);
+      delete layer.dataset.drawerVisible;
+      panel.style.removeProperty('transform');
+      scrim?.style.removeProperty('opacity');
+      releaseMain();
     };
-  }, [enabled, panelRef, rootRef, setOpen]);
+  }, [enabled, panelRef, rootRef]);
+
+  useLayoutEffect(() => {
+    motionRef.current?.syncOpen(open);
+  }, [open]);
 }

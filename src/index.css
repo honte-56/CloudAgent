@@ -942,44 +942,41 @@
   }
 
   /*
-   * Mobile sidebar drawer. useSidebarDrawerGesture writes --drawer-progress
-   * (0 closed … 1 open) on the workspace root; the panel slides with it, the
-   * scrim deepens and the main layer recedes a little to the right, the way a
-   * covered page shifts back under a pushed one. While a finger drags, the
-   * values follow it without transitions; on release they spring to rest.
+   * Mobile drawer motion stays on the three animated elements. The gesture
+   * hook writes their transform/opacity once per frame; no inherited motion
+   * variable invalidates styles throughout the conversation. The same CSS
+   * spring serves button toggles and touch releases.
    */
   .workspace-drawer {
     visibility: hidden;
     pointer-events: none;
-    transition: visibility 0s linear var(--spring-smooth-duration);
   }
 
-  .workspace-drawer[data-open="true"],
-  [data-drawer-dragging] .workspace-drawer {
+  .workspace-drawer[data-drawer-visible="true"] {
     visibility: visible;
     pointer-events: auto;
-    transition-delay: 0s;
   }
 
   .workspace-drawer-panel {
-    transform: translate3d(calc((var(--drawer-progress, 0) - 1) * 100%), 0, 0);
+    transform: translate3d(-100%, 0, 0);
     transition: transform var(--spring-smooth-duration) var(--spring-smooth);
     will-change: transform;
   }
 
   .workspace-drawer-scrim {
-    opacity: var(--drawer-progress, 0);
+    opacity: 0;
     transition: opacity var(--spring-smooth-duration) var(--ease-standard);
+    will-change: opacity;
   }
 
-  [data-drawer-active] > .workspace-main-layer {
-    transform: translate3d(calc(var(--drawer-progress, 0) * 56px), 0, 0);
+  .workspace-main-layer[data-drawer-active] {
     transition: transform var(--spring-smooth-duration) var(--spring-smooth);
+    will-change: transform;
   }
 
   [data-drawer-dragging] .workspace-drawer-panel,
   [data-drawer-dragging] .workspace-drawer-scrim,
-  [data-drawer-dragging] > .workspace-main-layer {
+  .workspace-main-layer[data-drawer-dragging] {
     transition: none;
   }
 

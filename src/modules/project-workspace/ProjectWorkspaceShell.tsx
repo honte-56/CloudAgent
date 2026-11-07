@@ -15,8 +15,7 @@ function ProjectWorkspaceShell({
   sendMessage,
   navigate,
 }: ProjectWorkspaceShellProps) {
-  // The mobile drawer writes its progress onto this element so the main layer
-  // below can recede in step with it.
+  // The mobile drawer listens for gestures within this workspace boundary.
   const shellRef = useRef<HTMLDivElement>(null);
 
   return (

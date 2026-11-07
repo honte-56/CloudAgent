@@ -20,7 +20,7 @@ import {
 import type { ProjectWorkspaceShellProps } from '@/shared/types';
 
 type ProjectSidebarRegionProps = Pick<ProjectWorkspaceShellProps, 'isMobile'> & {
-  /** The workspace root, which carries the drawer's progress for the main layer to follow. */
+  /** The workspace boundary used to listen for mobile drawer gestures. */
   motionRootRef: RefObject<HTMLDivElement | null>;
 };
 

@@ -1,74 +1,91 @@
-// Service Worker for CloudAgent PWA
-// Cache only manifest (needed for PWA install). HTML and JS are never pre-cached
-// so a rebuild + refresh always picks up the latest assets.
-const CACHE_NAME = 'claude-ui-v2';
-const urlsToCache = [
-  '/manifest.json'
-];
+// Replaced by the production build. The dev worker only handles Web Push.
+const BUILD = null;
+const CACHE_PREFIX = 'cloudagent-shell-';
+const CACHE_NAME = BUILD ? `${CACHE_PREFIX}${BUILD.id}` : null;
+const SHELL_URL = '/index.html';
 
-// Install event
+function isCacheableAsset(response) {
+  return response.ok && !response.redirected
+    && !response.headers.get('content-type')?.includes('text/html');
+}
+
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(urlsToCache))
-  );
-  self.skipWaiting();
+  if (!BUILD) return;
+  event.waitUntil((async () => {
+    const response = await fetch(SHELL_URL, { cache: 'reload' });
+    const html = await response.clone().text();
+    // Reject login redirects, fallback documents and a shell from a different
+    // deployment. An incomplete update must leave the working version active.
+    if (!response.ok || response.redirected
+      || !response.headers.get('content-type')?.includes('text/html')
+      || !BUILD.entries.every(entry => html.includes(entry))) {
+      throw new Error('App shell does not match this service worker build');
+    }
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.all(BUILD.assets.map(async url => {
+      // Hashed URLs can reuse the HTTP cache populated by the first page load.
+      const asset = await fetch(url);
+      if (!isCacheableAsset(asset)) throw new Error(`Unable to cache ${url}`);
+      await cache.put(url, asset);
+    }));
+    await cache.put(SHELL_URL, response);
+  })());
+  // Let the new version wait until existing windows close. Forcing activation
+  // could delete assets still needed by an open chat or editor.
 });
 
-// Fetch event — network-first for everything except hashed assets
 self.addEventListener('fetch', event => {
-  const url = event.request.url;
+  if (!BUILD || event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
 
-  // Never intercept API requests or WebSocket upgrades
-  if (url.includes('/api/') || url.includes('/ws')) {
-    return;
-  }
-
-  // Navigation requests (HTML) — always go to network, no caching
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match('/manifest.json').then(() =>
-        new Response('<h1>Offline</h1><p>Please check your connection.</p>', {
-          headers: { 'Content-Type': 'text/html' }
-        })
-      ))
-    );
-    return;
-  }
-
-  // Hashed assets (JS/CSS in /assets/) — cache-first since filenames change per build
-  if (url.includes('/assets/')) {
-    event.respondWith(
-      caches.match(event.request).then(cached => {
+  // Only known app routes use the shell. APIs, sockets, downloads, plugin
+  // pages and maintenance pages such as clear-cache.html go straight through.
+  const isAppRoute = url.pathname === '/' || url.pathname === '/index.html'
+    || url.pathname === '/file' || /^\/session\/[^/]+\/?$/.test(url.pathname);
+  if (event.request.mode === 'navigate' && isAppRoute) {
+    event.respondWith((async () => {
+      // An explicit refresh remains an escape hatch to the latest server HTML.
+      if (event.request.cache === 'reload' || event.request.cache === 'no-cache') {
+        try { return await fetch(event.request); } catch { /* Try the installed shell. */ }
+      }
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        const cached = await cache.match(SHELL_URL);
         if (cached) return cached;
-        return fetch(event.request).then(response => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          return response;
-        });
-      })
-    );
+      } catch { /* Storage can be unavailable or evicted. */ }
+      return fetch(event.request);
+    })());
     return;
   }
 
-  // Everything else — network-first
-  event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
-  );
+  // Build assets have content hashes; never store an error or an HTML fallback
+  // at a script URL. Keep the cache write alive after sending the response.
+  if (url.pathname.startsWith('/assets/')) {
+    const resource = (async () => {
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        const cached = await cache.match(event.request);
+        if (cached) return { response: cached };
+      } catch { /* Fetch normally if storage is unavailable. */ }
+      const response = await fetch(event.request);
+      return { response, copy: isCacheableAsset(response) ? response.clone() : null };
+    })();
+    event.respondWith(resource.then(result => result.response));
+    event.waitUntil(resource.then(async ({ copy }) => {
+      if (!copy) return;
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(event.request, copy);
+    }).catch(() => {}));
+  }
 });
 
-// Activate event — purge old caches
 self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(cacheNames =>
-      Promise.all(
-        cacheNames
-          .filter(name => name !== CACHE_NAME)
-          .map(name => caches.delete(name))
-      )
-    )
-  );
-  self.clients.claim();
+  if (!BUILD) return;
+  event.waitUntil(caches.keys().then(names => Promise.all(names
+    .filter(name => name !== CACHE_NAME
+      && (name.startsWith(CACHE_PREFIX) || /^claude-ui-v\d+$/.test(name)))
+    .map(name => caches.delete(name)))));
 });
 
 // Push notification event

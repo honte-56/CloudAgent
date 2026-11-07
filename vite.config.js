@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts.js'
+import { pwaBuild } from './scripts/pwa-build.js'
 
 // The client shows the installed package version so it can be compared against the
 // version the server process is actually running. Reading package.json here and
@@ -90,7 +91,7 @@ export default defineConfig(({ mode }) => {
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
   return {
-    plugins: [directPackageImports, translationJson, react(), {
+    plugins: [directPackageImports, translationJson, react(), pwaBuild(), {
       name: 'copy-mermaid-runtime',
       closeBundle() {
         cpSync(dirname(createRequire(import.meta.url).resolve('mermaid')),

@@ -2,7 +2,7 @@ import { Edit3, ExternalLink, Globe, Lock, Plus, Server, Terminal, Trash2, Users
 import { useTranslation } from 'react-i18next';
 
 import type { McpProject, McpProvider, McpScope, ProviderMcpServer } from '@/shared/types';
-import { IS_PLATFORM } from '@/shared/utils';
+
 import { ActionMenu, Badge, Button } from '@/shared/ui';
 import { MCP_GLOBAL_SUPPORTED_TRANSPORTS, MCP_PROVIDER_NAMES } from '@/shared/constants';
 import { useMcpServers } from '@/modules/mcp/hooks/useMcpServers';
@@ -289,7 +289,7 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
         </div>
       )}
 
-      {selectedProvider === 'claude' && !IS_PLATFORM && <TeamMcpFeatureCard />}
+      {selectedProvider === 'claude' && <TeamMcpFeatureCard />}
 
       {/* Mounted only while open: each instance runs a full useMcpServerForm. */}
       {serverForm?.scope === 'provider' && (

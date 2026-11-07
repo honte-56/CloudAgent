@@ -47,6 +47,16 @@ type FetchProjectsOptions = {
   showLoadingState?: boolean;
 };
 
+// A failed HTTP response is an error object, not a project list. Reject it before
+// React receives it: sidebar sorting otherwise throws during render and blanks the app.
+async function readProjectListResponse(response: Response): Promise<Project[]> {
+  const data: unknown = await response.json();
+  if (response.ok === false || !Array.isArray(data)) {
+    throw new Error(`Unable to load projects (${response.status || 'invalid response'})`);
+  }
+  return data as Project[];
+}
+
 type RegisterOptimisticSessionArgs = {
   sessionId: string;
   provider: LLMProvider;
@@ -519,7 +529,7 @@ export function useProjectsState({
         setIsLoadingProjects(true);
       }
       const response = await api.projects();
-      const projectData = (await response.json()) as Project[];
+      const projectData = await readProjectListResponse(response);
 
       if (projectsRequestIdRef.current !== requestId) {
         return;
@@ -1095,7 +1105,7 @@ export function useProjectsState({
   const handleSidebarRefresh = useCallback(async () => {
     try {
       const response = await api.projects();
-      const freshProjects = (await response.json()) as Project[];
+      const freshProjects = await readProjectListResponse(response);
       const projectsWithTaskMaster = mergeTaskMasterCache(freshProjects, projects);
       const mergedProjects = mergeExpandedSessionPages(projects, projectsWithTaskMaster);
 

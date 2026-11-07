@@ -1,11 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/modules/auth';
-import { IS_PLATFORM } from '@/shared/utils';
+
 import { expireAuthSession, isAuthTokenExpired } from '@/shared/authToken';
 import type { ServerEvent } from '@/shared/types';
 import { createChatDelivery } from '@/shared/chatDelivery';
-
 
 type ServerEventListener = (event: ServerEvent) => void;
 
@@ -52,13 +51,12 @@ export const useWebSocket = () => {
 
 const buildWebSocketUrl = (token: string | null) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
   if (!token) return null;
   if (isAuthTokenExpired(token)) {
     expireAuthSession();
     return null;
   }
-  return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // OSS mode: Use same host:port that served the page
+  return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // Use the same host:port that served the page
 };
 
 const useWebSocketProviderState = (): WebSocketContextType => {
@@ -77,7 +75,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const { isLoading: isAuthLoading, token, user } = useAuth();
   // Retains acknowledgement waiters through reconnects without re-rendering on each frame.
   const ownerRef = useRef('');
-  ownerRef.current = String(user?.id ?? user?.username ?? 'platform');
+  ownerRef.current = String(user?.id ?? user?.username ?? '');
   const deliveryRef = useRef<ReturnType<typeof createChatDelivery> | null>(null);
   if (!deliveryRef.current) deliveryRef.current = createChatDelivery(() => wsRef.current, () => ownerRef.current);
 
@@ -94,7 +92,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   // Depend on the account identity, not a freshly allocated auth user object.
   const userKey = user ? String(user.id ?? user.username) : null;
   useEffect(() => {
-    if (!IS_PLATFORM && (isAuthLoading || !userKey)) return;
+    if ((isAuthLoading || !userKey)) return;
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let deadline: ReturnType<typeof setTimeout> | undefined;

@@ -166,7 +166,6 @@ afterEach(() => {
 
 const createService = (overrides: Parameters<typeof createProviderCliService>[0] = {}) => createProviderCliService({
   listBusyProviders: async () => [],
-  platformMode: false,
   fetch: (async (input: string | URL | Request) => {
     unexpectedRegistryCalls.push(String(input));
     throw new Error('the registry must not be contacted in this test');
@@ -428,7 +427,7 @@ test('getCliStatus does not ask the registry about a CLI that is not installed',
   });
 });
 
-test('Cursor has no npm release to compare with; Codex ships with CloudAgent; platform mode offers no update', async () => {
+test('Cursor has no npm release to compare with; Codex ships with CloudAgent', async () => {
   await withIsolatedCliEnv(async (binDir) => {
     const cursor = await createFakeCli(binDir, 'cursor-agent');
     await cursor.set('version', '2026.07.20-8cc9c0b\n');
@@ -445,22 +444,6 @@ test('Cursor has no npm release to compare with; Codex ships with CloudAgent; pl
     assert.equal(codexStatus.updateUnavailableReason, 'bundled');
     await rejectsWithAppError(service.updateCli('codex'), 'PROVIDER_CLI_UPDATE_UNAVAILABLE', 400);
 
-    const platformService = createService({ platformMode: true });
-    const platformStatus = await platformService.getCliStatus('cursor');
-    assert.equal(platformStatus.installedVersion, '2026.07.20-8cc9c0b');
-    assert.equal(platformStatus.updateCommand, null);
-    assert.equal(platformStatus.updateUnavailableReason, 'platform');
-    await rejectsWithAppError(platformService.updateCli('cursor'), 'PROVIDER_CLI_UPDATE_UNAVAILABLE', 403);
-    assert.equal(await cursor.read('update-count'), null);
-
-    // A CLI that is on npm is not looked up either: the platform, not this server, updates it.
-    // (createService's default registry fails the test when it is asked.)
-    const claude = await createFakeCli(binDir, 'claude');
-    await claude.set('version', '2.1.200 (Claude Code)\n');
-    const platformClaude = await platformService.getCliStatus('claude');
-    assert.equal(platformClaude.installedVersion, '2.1.200');
-    assert.equal(platformClaude.latestVersion, null);
-    assert.equal(platformClaude.updateAvailable, false);
   });
 });
 

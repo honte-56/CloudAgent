@@ -15,7 +15,7 @@ import { sessionExecutionService } from '@/modules/providers/services/session-ex
 import { providerPlanUsageService } from '@/modules/providers/services/provider-plan-usage.service.js';
 import type { IProvider, IProviderRuntime } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary, WorkflowAgentActivity } from '@/shared/types.js';
-import { AppError, IS_PLATFORM } from '@/shared/utils.js';
+import { AppError } from '@/shared/utils.js';
 
 async function withProviderServer(
   run: (baseUrl: string, workspacePath: string) => Promise<void>,
@@ -516,9 +516,7 @@ test('the running-sessions route reports a session held open for background work
   }
 });
 
-test('the CLI update route refuses while that provider is busy in a session', {
-  skip: IS_PLATFORM ? 'platform mode refuses every CLI update before the busy check' : false,
-}, async () => {
+test('the CLI update route refuses while that provider is busy in a session', async () => {
   // A session held open for background work counts as busy, like a running
   // chat: replacing the CLI under it could break the work it is still doing.
   const realListProviders = providerRegistry.listProviders;

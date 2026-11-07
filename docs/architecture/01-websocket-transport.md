@@ -63,7 +63,7 @@ every open `/ws` socket in the process. A run's writer holds only the sockets wa
 | --- | --- |
 | `server/modules/websocket/services/websocket-server.service.ts` | Creates the one `WebSocketServer`, attaches the heartbeat, routes by pathname |
 | `server/modules/websocket/services/websocket-auth.service.ts` | `verifyWebSocketClient` — the upgrade-time gate for every path |
-| `server/modules/auth/auth.middleware.ts` | `authenticateWebSocket` — first DB user in platform mode, JWT verification in OSS mode |
+| `server/modules/auth/auth.middleware.ts` | `authenticateWebSocket` — JWT verification and active-user lookup |
 | `server/modules/websocket/services/websocket-state.service.ts` | `connectedClients`, the set of open `/ws` sockets, and `WS_OPEN_STATE` |
 | `server/modules/websocket/services/chat-websocket.service.ts` | The `/ws` protocol: the six inbound handlers, `protocol_error`, the attachment trust boundary, `runDetachedChatTurn` |
 | `server/modules/websocket/services/chat-run-registry.service.ts` | `chatRunRegistry` — one run per session, `seq` stamping, the replay buffer, the exactly-one-`complete` contract |
@@ -146,8 +146,7 @@ Only `/ws` and `/desktop-notifications` read `request.user` at all. `/shell` and
 call `subscribe(listener)`; they never construct a `WebSocket`.**
 
 `buildWebSocketUrl` (`WebSocketContext.tsx:36-45`) is the whole URL story: same host as the
-page, `wss:` when the page is `https:`, `/ws` with no token in platform mode, `/ws?token=`
-in OSS mode. An expired token is caught here — `expireAuthSession()` runs and the function
+page, `wss:` when the page is `https:`, `/ws?token=` with the current JWT. An expired token is caught here — `expireAuthSession()` runs and the function
 returns `null`, so no socket is created at all.
 
 **The listener registry is a ref-held `Set`, dispatched synchronously** (`:56`, `:61-69`),
@@ -586,7 +585,7 @@ The parts worth knowing:
 
 The client is `useShellConnection.ts:127` via `getShellWebSocketUrl`
 (`src/modules/shell/utils/socket.ts:39-53`), which builds the URL the same way the chat one
-does — no token in platform mode, `?token=` in OSS.
+does, with the current JWT in `?token=`.
 
 ## The plugin proxy and desktop notifications
 
@@ -621,7 +620,6 @@ with 1008 (`:47-50`); the client then sends one `register` frame carrying `devic
 | No send queue, no backoff | A frame sent while closed is dropped with a warning, and a dead server is retried flat every 3 seconds forever |
 | An expired token produces no socket *and no retry* | `buildWebSocketUrl` returns `null` before a `WebSocket` exists, so there is no `onclose` to schedule anything. Recovery waits on the auth state changing |
 | Heartbeat detection takes two intervals | The tick that finds `isAlive === false` is the one *after* the unanswered ping — so up to ~60 s, not 30 |
-| Platform mode ignores tokens entirely | `verifyWebSocketClient:32`. The local `.env` here sets `VITE_IS_PLATFORM=true`, so auth in this working copy does not behave the way CI does |
 | `ws` in the context value is a snapshot | `value` memoises `ws: wsRef.current` at render time (`:177-183`), so it can be stale between renders. Use `sendMessage` and `subscribe`; treat `ws` as a connectedness signal only |
 | `/plugin-ws` has no in-repo caller | It is a third-party extension point, which is exactly why broadcasting over `wss.clients` was a real leak and not a tidiness complaint |
 
@@ -629,7 +627,7 @@ with 1008 (`:47-50`); the client then sends one `register` frame carrying `devic
 
 | Symptom | Start here |
 | --- | --- |
-| The socket never opens | `buildWebSocketUrl` (`WebSocketContext.tsx:36`) — platform mode? expired token? |
+| The socket never opens | `buildWebSocketUrl` (`WebSocketContext.tsx:36`) — missing or expired token? |
 | Connects, then immediately closes | `verifyWebSocketClient:18` and the attempt log at `:29` |
 | Reconnect loop, or two sockets fighting | The `onclose` identity check (`WebSocketContext.tsx:106`) |
 | Socket dies permanently right after login | The `unmountedRef` reset (`:136`) |

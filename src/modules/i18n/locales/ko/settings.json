@@ -446,7 +446,6 @@
       "updateAvailable": "업데이트 가능: v{{version}}",
       "upToDate": "최신 버전",
       "bundled": "CloudAgent에 포함되어 있으며 CloudAgent와 함께 업데이트됩니다.",
-      "platform": "호스팅 플랫폼에서 관리합니다.",
       "updateTo": "v{{version}}(으)로 업데이트",
       "runUpdater": "업데이트 실행",
       "updating": "업데이트 중…",

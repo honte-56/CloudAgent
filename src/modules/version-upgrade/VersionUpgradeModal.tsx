@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 
 import { api } from "@/shared/api";
 import type { ReleaseInfo,InstallMode } from "@/shared/types";
-import { copyTextToClipboard,IS_PLATFORM } from "@/shared/utils";
+import { copyTextToClipboard } from "@/shared/utils";
 
 type VersionUpgradeModalProps = {
     isOpen: boolean;
@@ -15,8 +15,6 @@ type VersionUpgradeModalProps = {
     latestVersion: string | null;
     installMode: InstallMode;
 };
-
-const RELOAD_COUNTDOWN_START = 120;
 
 /** This module's only public export: rendered by the sidebar module's modal layer to show release notes and run the app upgrade. */
 export function VersionUpgradeModal({
@@ -30,45 +28,17 @@ export function VersionUpgradeModal({
     const { t } = useTranslation('common');
     const upgradeCommand = installMode === 'npm'
         ? t('versionUpdate.npmUpgradeCommand')
-        : IS_PLATFORM
-            ? 'npm run update:platform'
-            : 'git checkout main && git pull && npm install';
+        : 'git checkout main && git pull && npm install';
+    // Prevent duplicate update requests and show their progress.
     const [isUpdating, setIsUpdating] = useState(false);
+    // Retain update command output for the progress panel.
     const [updateOutput, setUpdateOutput] = useState('');
+    // Keep a failed update visible until the next attempt.
     const [updateError, setUpdateError] = useState('');
-    const [reloadCountdown, setReloadCountdown] = useState<number | null>(null);
-
-    useEffect(() => {
-        if (!IS_PLATFORM || reloadCountdown === null) {
-            return;
-        }
-
-        if (reloadCountdown <= 0) {
-            // Force a hard reload (bypass cache) so stale assets from the
-            // previous version aren't served after the environment updates.
-            const url = new URL(window.location.href);
-            url.searchParams.set('_hardReload', Date.now().toString());
-            window.location.replace(url.toString());
-            return;
-        }
-
-        const timeoutId = window.setTimeout(() => {
-            setReloadCountdown((previousCountdown) => {
-                if (previousCountdown === null) {
-                    return null;
-                }
-
-                return Math.max(previousCountdown - 1, 0);
-            });
-        }, 1000);
-
-        return () => window.clearTimeout(timeoutId);
-    }, [reloadCountdown]);
 
     const handleUpdateNow = useCallback(async () => {
         setIsUpdating(true);
         setUpdateOutput(t('versionUpdate.startingUpdate') + '\n');
-        setReloadCountdown(IS_PLATFORM ? RELOAD_COUNTDOWN_START : null);
         setUpdateError('');
 
         try {
@@ -76,7 +46,7 @@ export function VersionUpgradeModal({
             const response = await api.system.update();
 
             // The server (or a proxy in front of it) can answer with an HTML
-            // page instead of JSON — e.g. while a hosted/Docker deployment
+            // page instead of JSON — e.g. while a server deployment
             // restarts mid-update — so never parse the body blindly.
             const rawBody = await response.text();
             let data: { output?: string; error?: string } | null = null;
@@ -87,41 +57,24 @@ export function VersionUpgradeModal({
             }
 
             if (!data) {
-                if (IS_PLATFORM) {
-                    // On platform the update restarts the server, which often
-                    // cuts the response short. Treat it as in progress and let
-                    // the reload countdown pick up the new version.
-                    setUpdateOutput(prev => prev + '\n' + t('versionUpdate.updateStartedRestarting') + '\n');
-                } else {
-                    setReloadCountdown(null);
-                    const message = t('versionUpdate.unexpectedResponse', { status: response.status });
-                    setUpdateError(message);
-                    setUpdateOutput(prev => prev + '\n❌ ' + t('versionUpdate.updateFailed') + ': ' + message + '\n');
-                }
+                const message = t('versionUpdate.unexpectedResponse', { status: response.status });
+                setUpdateError(message);
+                setUpdateOutput(prev => prev + '\n❌ ' + t('versionUpdate.updateFailed') + ': ' + message + '\n');
                 return;
             }
 
             if (response.ok) {
                 setUpdateOutput(prev => prev + (data.output || '') + '\n');
                 setUpdateOutput(prev => prev + '\n✅ ' + t('versionUpdate.updateCompleted') + '\n');
-                if (!IS_PLATFORM) {
-                    setUpdateOutput(prev => prev + t('versionUpdate.restartServer') + '\n');
-                }
+                setUpdateOutput(prev => prev + t('versionUpdate.restartServer') + '\n');
             } else {
-                setReloadCountdown(null);
                 setUpdateError(data.error || t('versionUpdate.updateFailed'));
                 setUpdateOutput(prev => prev + '\n❌ ' + t('versionUpdate.updateFailed') + ': ' + (data.error || t('versionUpdate.unknownError')) + '\n');
             }
-        } catch (error: any) {
-            if (IS_PLATFORM) {
-                // Connection dropped mid-request — expected when the platform
-                // update restarts the server. Keep the countdown running.
-                setUpdateOutput(prev => prev + '\n' + t('versionUpdate.connectionInterrupted') + '\n');
-            } else {
-                setReloadCountdown(null);
-                setUpdateError(error.message);
-                setUpdateOutput(prev => prev + '\n❌ ' + t('versionUpdate.updateFailed') + ': ' + error.message + '\n');
-            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setUpdateError(message);
+            setUpdateOutput(prev => prev + '\n❌ ' + t('versionUpdate.updateFailed') + ': ' + message + '\n');
         } finally {
             setIsUpdating(false);
         }
@@ -213,13 +166,7 @@ export function VersionUpgradeModal({
                         <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 p-4 dark:bg-gray-950">
                             <pre className="whitespace-pre-wrap font-mono text-xs text-green-400">{updateOutput}</pre>
                         </div>
-                        {IS_PLATFORM && reloadCountdown !== null && (
-                            <div className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
-                                {reloadCountdown === 0
-                                    ? t('versionUpdate.refreshNow')
-                                    : t('versionUpdate.refreshIn', { count: reloadCountdown })}
-                            </div>
-                        )}
+
                         {updateError && (
                             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
                                 {updateError}

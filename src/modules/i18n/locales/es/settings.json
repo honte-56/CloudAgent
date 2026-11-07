@@ -464,7 +464,6 @@
       "updateAvailable": "Actualización disponible: v{{version}}",
       "upToDate": "Actualizada",
       "bundled": "Se incluye con CloudAgent y se actualiza junto con él.",
-      "platform": "La gestiona la plataforma de alojamiento.",
       "updateTo": "Actualizar a v{{version}}",
       "runUpdater": "Ejecutar actualizador",
       "updating": "Actualizando…",

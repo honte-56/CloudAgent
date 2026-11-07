@@ -24,9 +24,7 @@ function createDependencies(
     homeDirectory: () => '/home/test',
     spawnProcess: (() => { throw new Error('spawn should not run'); }) as unknown as
       AgentDependencies['spawnProcess'],
-    platformMode: true,
-    users: { getFirstUser: () => ({ id: 1, username: 'test-user' }) },
-    apiKeys: { validateApiKey: () => undefined },
+    apiKeys: { validateApiKey: key => key === 'fixture-api-key' ? { id: 1, username: 'test-user' } : undefined },
     githubTokens: { getActiveGithubToken: () => null },
     projectGithub: { rememberClone() {}, resolve: async () => null },
     projects: { createProjectPath: () => ({ outcome: 'created' }) },
@@ -78,7 +76,7 @@ test('Agent route rejects missing project input before invoking provider depende
   await withAgentServer(createDependencies(), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({ message: 'Inspect this project', stream: false }),
     });
     const body = await response.json() as { error: string };
@@ -91,7 +89,6 @@ test('Agent route rejects missing project input before invoking provider depende
 test('Agent route validates API keys through the injected repository', async () => {
   const receivedKeys: string[] = [];
   await withAgentServer(createDependencies({
-    platformMode: false,
     apiKeys: {
       validateApiKey: (apiKey) => {
         receivedKeys.push(apiKey);
@@ -110,11 +107,24 @@ test('Agent route validates API keys through the injected repository', async () 
   assert.deepEqual(receivedKeys, ['invalid-key']);
 });
 
+test('self-hosted Agent API keys authenticate before starting a run', async () => {
+  await withAgentServer(createDependencies({
+    apiKeys: { validateApiKey: (key) => key === 'fixture-api-key' ? { id: 1, username: 'fixture' } : undefined },
+  }), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agent`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
+      body: JSON.stringify({ message: 'Inspect this project' }),
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'Either githubUrl or projectPath is required' });
+  });
+});
+
 test('Agent route rejects GitHub lookalike hosts before cloning', async () => {
   await withAgentServer(createDependencies(), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         githubUrl: 'https://github.com.evil.example/owner/repo',
         message: 'Run',
@@ -154,7 +164,7 @@ test('GitHub cloning keeps credentials out of arguments and remote URL', async (
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         githubUrl: 'https://github.com/owner/repo.git',
         message: 'Run',
@@ -206,7 +216,7 @@ test('Agent route reuses a matching checkout without cloning or deleting it', as
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         githubUrl: 'https://github.com/owner/repo.git',
         projectPath: '/home/test/.claude/external-projects/existing',
@@ -238,7 +248,7 @@ test('Agent route starts opencode on the catalog default when the request names 
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         projectPath: '/home/test/project',
         message: 'Run',
@@ -270,7 +280,7 @@ test('Agent route starts codex on the catalog default when the request names no 
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         projectPath: '/home/test/project',
         message: 'Run',
@@ -311,7 +321,7 @@ test('Agent API uses the project binding for both push and PR creation', async (
       pulls = { create: async () => ({ data: { number: 1, html_url: 'https://github.com/example/repo/pull/1' } }) };
     } as never,
   }), async (base) => {
-    const response = await fetch(`${base}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectPath: '/workspace/project', message: 'Change', createBranch: true, createPR: true, branchName: 'feature/test', stream: false }) });
+    const response = await fetch(`${base}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' }, body: JSON.stringify({ projectPath: '/workspace/project', message: 'Change', createBranch: true, createPR: true, branchName: 'feature/test', stream: false }) });
     assert.equal(response.status, 200);
   });
   assert.equal(githubAuth, 'bound-account');
@@ -335,7 +345,7 @@ test('reusing a cloned project keeps its binding instead of selecting the latest
       return child;
     }) as never,
   }), async (base) => {
-    const response = await fetch(`${base}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ githubUrl: 'https://github.com/example/repo.git', projectPath: '/workspace/repo', message: 'Continue', stream: false }) });
+    const response = await fetch(`${base}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' }, body: JSON.stringify({ githubUrl: 'https://github.com/example/repo.git', projectPath: '/workspace/repo', message: 'Continue', stream: false }) });
     assert.equal(response.status, 200);
   });
   assert.equal(rememberedToken, 'existing-binding');
@@ -371,7 +381,7 @@ async function runWithoutModel(
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         projectPath: '/home/test/project',
         message: 'Run',
@@ -399,7 +409,7 @@ test('Agent route marks a Claude run unattended, as no person can answer an MCP 
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({ projectPath: '/home/test/project', message: 'Run', provider: 'claude', stream: false }),
     });
     assert.equal(response.status, 200);
@@ -489,7 +499,7 @@ test('Agent route reads no model catalog for a continued session of an unregiste
   }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/agent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' },
       body: JSON.stringify({
         projectPath: '/home/test/project',
         message: 'Run',

@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
 import { StandaloneShell } from '@/modules/standalone-shell';
-import { IS_PLATFORM } from '@/shared/utils';
+
 import type { LLMProvider } from '@/shared/types';
 
 /**
@@ -17,8 +17,8 @@ import type { LLMProvider } from '@/shared/types';
 const DEFAULT_PROJECT_FOR_EMPTY_SHELL = {
   projectId: 'default',
   displayName: 'default',
-  fullPath: IS_PLATFORM ? '/workspace' : '',
-  path: IS_PLATFORM ? '/workspace' : '',
+  fullPath: '',
+  path: '',
 };
 
 type ProviderLoginModalProps = {
@@ -52,7 +52,7 @@ const getProviderCommand = ({
   }
 
   if (provider === 'codex') {
-    return IS_PLATFORM ? 'codex login --device-auth' : 'codex login';
+    return 'codex login';
   }
 
   if (provider === 'opencode') {

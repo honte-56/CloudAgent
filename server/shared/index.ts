@@ -1,5 +1,7 @@
 export { appendFilesInputTag, buildCodexInputItems, normalizeImageDescriptors } from './image-attachments.js';
 export { createCompleteMessage, createNormalizedMessage } from './utils.js';
+// WebSocket authentication and Agent routes use the existing upgrade/provider contracts.
+export type { AuthenticatedWebSocketRequest, ProviderRunFunction } from './types.js';
 export type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter, SessionExecutionOwner, ProviderRunReservation } from './types.js';
 // Providers' task-progress reader and tests share the normalized conversation contract.
 export type { LLMProvider, NormalizedMessage, TaskProgressSnapshot } from './types.js';

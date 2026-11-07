@@ -11,12 +11,10 @@ import {
   githubTokensDb,
   projectsDb,
   sessionsDb,
-  userDb,
 } from '@/modules/database/index.js';
 import { providerModelsService, sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
-import type { LLMProvider } from '@/shared/types.js';
-import { IS_PLATFORM } from '@/shared/utils.js';
+import type { LLMProvider } from '@/shared/index.js';
 
 import { createAgentRouter } from './agent.routes.js';
 
@@ -35,10 +33,6 @@ export function createAgentModule(externalDependencies: AgentExternalDependencie
     crypto,
     homeDirectory: os.homedir,
     spawnProcess: spawn,
-    platformMode: IS_PLATFORM,
-    users: {
-      getFirstUser: () => userDb.getFirstUser(),
-    },
     apiKeys: {
       validateApiKey: (apiKey) => apiKeysDb.validateApiKey(apiKey),
     },

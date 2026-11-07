@@ -83,6 +83,27 @@ afterEach(() => {
   vi.resetModules();
 });
 
+test.each([401, 500, 200])('an error payload with HTTP %s never becomes the sidebar project list', async status => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  projectsResponse.mockResolvedValue({ ok: status < 400, status, json: async () => ({ error: 'Request failed' }) });
+  const { result } = await renderProjectsState();
+  await waitFor(() => assert.equal(result.current.isLoadingProjects, false));
+  assert.deepEqual(result.current.projects, []);
+});
+
+test('failed background and manual refreshes preserve the existing project list', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  respondWith([buildProject()]);
+  const { result } = await renderProjectsState();
+  await waitFor(() => assert.equal(result.current.projects.length, 1));
+  const before = result.current.projects;
+  projectsResponse.mockResolvedValue({ ok: false, status: 403, json: async () => ({ error: 'Access denied' }) });
+  await act(async () => { await result.current.refreshProjectsSilently(); });
+  assert.equal(result.current.projects, before);
+  await act(async () => { await result.current.sidebarSharedProps.onRefresh(); });
+  assert.equal(result.current.projects, before);
+});
+
 test('a refresh that renames the selected project updates the selected copy', async () => {
   respondWith([buildProject()]);
   const { result } = await renderProjectsState();

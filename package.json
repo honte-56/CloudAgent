@@ -60,8 +60,7 @@
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js",
-    "prepare": "husky",
-    "update:platform": "./update-platform.sh"
+    "prepare": "husky"
   },
   "build": {
     "appId": "ai.cloudcli.desktop",

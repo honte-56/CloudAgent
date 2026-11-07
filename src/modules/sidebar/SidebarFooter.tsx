@@ -1,7 +1,6 @@
 import { Settings, ArrowUpCircle, Bug, AlertTriangle } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { IS_PLATFORM } from '@/shared/utils';
 import type { ReleaseInfo } from '@/shared/types';
 
 const GITHUB_ISSUES_URL = 'https://github.com/honte-56/CloudAgent/issues/new';
@@ -105,19 +104,17 @@ export default function SidebarFooter({
         </a>
       </div>
 
-      {/* Version brand line (OSS mode only) */}
-      {!IS_PLATFORM && (
-        <div className="pt-2 text-center">
-          <a
-            href={GITHUB_REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[10px] text-muted-foreground/50 transition-colors hover:text-muted-foreground"
-          >
-            CloudAgent v{currentVersion} – {t('branding.openSource')}
-          </a>
-        </div>
-      )}
+      {/* Version brand line */}
+      <div className="pt-2 text-center">
+        <a
+          href={GITHUB_REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[10px] text-muted-foreground/50 transition-colors hover:text-muted-foreground"
+        >
+          CloudAgent v{currentVersion} – {t('branding.openSource')}
+        </a>
+      </div>
     </div>
   );
 }

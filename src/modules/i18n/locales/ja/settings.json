@@ -417,7 +417,6 @@
       "updateAvailable": "アップデートあり: v{{version}}",
       "upToDate": "最新です",
       "bundled": "CloudAgent に同梱されており、CloudAgent と一緒に更新されます。",
-      "platform": "ホスティングプラットフォームが管理しています。",
       "updateTo": "v{{version}} に更新",
       "runUpdater": "アップデーターを実行",
       "updating": "更新中…",

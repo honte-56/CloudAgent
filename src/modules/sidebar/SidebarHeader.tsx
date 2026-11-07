@@ -4,7 +4,7 @@ import type { TFunction } from 'i18next';
 import { Input } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import { CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
-import { IS_PLATFORM } from '@/shared/utils';
+
 import type { SidebarSearchMode } from '@/shared/types';
 import GitHubStarBadge from '@/modules/sidebar/GitHubStarBadge';
 import SidebarModeTabs from '@/modules/sidebar/SidebarModeTabs';
@@ -91,17 +91,7 @@ export default function SidebarHeader({
       style={isPWA && isMobile ? { paddingTop: '16px' } : undefined}
     >
       <div className="flex items-center justify-between gap-2">
-        {IS_PLATFORM ? (
-          <a
-            href="https://cloudcli.ai/dashboard"
-            className="flex min-w-0 items-center gap-2.5 transition-opacity hover:opacity-80 active:opacity-70"
-            title={t('tooltips.viewEnvironments')}
-          >
-            <LogoBlock t={t} />
-          </a>
-        ) : (
-          <LogoBlock t={t} />
-        )}
+        <LogoBlock t={t} />
 
         <div className="flex flex-shrink-0 items-center gap-0.5">
           <button

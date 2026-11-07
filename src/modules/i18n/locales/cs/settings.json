@@ -436,7 +436,6 @@
       "updateAvailable": "K dispozici je aktualizace: v{{version}}",
       "upToDate": "Aktuální",
       "bundled": "Dodává se s CloudAgent a aktualizuje se spolu s ním.",
-      "platform": "Spravováno hostingovou platformou.",
       "updateTo": "Aktualizovat na v{{version}}",
       "runUpdater": "Spustit aktualizaci",
       "updating": "Aktualizace…",

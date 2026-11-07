@@ -463,7 +463,6 @@
       "updateAvailable": "Pembaruan tersedia: v{{version}}",
       "upToDate": "Sudah terbaru",
       "bundled": "Disertakan bersama CloudAgent dan diperbarui bersamanya.",
-      "platform": "Dikelola oleh platform hosting.",
       "updateTo": "Perbarui ke v{{version}}",
       "runUpdater": "Jalankan pembaru",
       "updating": "Memperbarui…",

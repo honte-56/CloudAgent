@@ -1,7 +1,6 @@
 import { Star, X } from 'lucide-react';
 
 import { useGitHubStars } from '@/modules/sidebar/hooks/useGitHubStars';
-import { IS_PLATFORM } from '@/shared/utils';
 
 const GITHUB_REPO_URL = 'https://github.com/honte-56/CloudAgent';
 
@@ -17,7 +16,7 @@ function GitHubIcon({ className }: { className?: string }) {
 export default function GitHubStarBadge() {
   const { formattedCount, isDismissed, dismiss } = useGitHubStars('honte-56', 'CloudAgent');
 
-  if (IS_PLATFORM || isDismissed) return null;
+  if (isDismissed) return null;
 
   return (
     <div className="group/star relative hidden md:block">

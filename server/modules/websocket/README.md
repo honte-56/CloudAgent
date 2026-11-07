@@ -76,14 +76,9 @@ sequenceDiagram
 
   Client->>WSS: Upgrade Request
   WSS->>Auth: verifyClient(info)
-  alt Platform mode
-    Auth->>Auth: authenticateWebSocket(null)
-    Auth->>Auth: attach request.user
-  else OSS mode
-    Auth->>Auth: read token from ?token or Authorization
-    Auth->>Auth: authenticateWebSocket(token)
-    Auth->>Auth: attach request.user
-  end
+  Auth->>Auth: read JWT from ?token or Authorization
+  Auth->>Auth: authenticateWebSocket(token)
+  Auth->>Auth: attach request.user
 
   alt Auth failed
     Auth-->>WSS: false (reject handshake)

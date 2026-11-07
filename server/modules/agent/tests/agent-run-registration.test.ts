@@ -30,11 +30,15 @@ type RunFunction = AgentDependencies['queryClaude'];
 
 async function withIsolatedDatabase(run: () => Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
+  const previousNodeEnv = process.env.NODE_ENV;
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'agent-run-registration-'));
   closeConnection();
+  // Production-mode initialization migrates legacy data. Test databases must
+  // start empty, even when this test is launched from a production shell.
+  process.env.NODE_ENV = 'test';
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
-  await initializeDatabase();
   try {
+    await initializeDatabase();
     await run();
   } finally {
     connectedClients.clear();
@@ -45,6 +49,8 @@ async function withIsolatedDatabase(run: () => Promise<void>): Promise<void> {
     } else {
       process.env.DATABASE_PATH = previousDatabasePath;
     }
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
     await rm(tempDirectory, { recursive: true, force: true });
   }
 }
@@ -56,9 +62,7 @@ function createDependencies(queryClaude: RunFunction): AgentDependencies {
     crypto: nodeCrypto,
     homeDirectory: () => '/home/test',
     spawnProcess: (() => { throw new Error('spawn should not run'); }) as unknown as AgentDependencies['spawnProcess'],
-    platformMode: true,
-    users: { getFirstUser: () => ({ id: 1, username: 'test-user' }) },
-    apiKeys: { validateApiKey: () => undefined },
+    apiKeys: { validateApiKey: key => key === 'fixture-api-key' ? { id: 1, username: 'test-user' } : undefined },
     githubTokens: { getActiveGithubToken: () => null },
     projectGithub: { rememberClone() {}, resolve: async () => null },
     projects: { createProjectPath: () => ({ outcome: 'created' }) },
@@ -96,7 +100,7 @@ async function withAgentServer(dependencies: AgentDependencies, run: (baseUrl: s
 }
 
 const post = (baseUrl: string, body: Record<string, unknown>) =>
-  fetch(`${baseUrl}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${baseUrl}/api/agent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-api-key' }, body: JSON.stringify(body) });
 
 const readEvents = async (response: Response): Promise<Array<Record<string, unknown>>> =>
   (await response.text())

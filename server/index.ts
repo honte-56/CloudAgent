@@ -9,7 +9,7 @@ import http from 'http';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 
-import { AppError, findApplicationRoot, getModuleDirectory, IS_PLATFORM, terminalTextStyles } from '@/shared/utils.js';
+import { AppError, findApplicationRoot, getModuleDirectory, terminalTextStyles } from '@/shared/utils.js';
 import {
     closeSessionsWatcher,
     removeClaudeStatuslineCapture,
@@ -80,7 +80,6 @@ const RUNNING_VERSION = (() => {
 const systemRoutes = createSystemModule({
     appRoot: APP_ROOT,
     installMode,
-    isPlatform: IS_PLATFORM,
 });
 console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
@@ -108,7 +107,6 @@ chatRunRegistry.setRetentionGuard((sessionId) => providerRuntimeService.hasBackg
 
 createWebSocketServer(server, {
     verifyClient: {
-        isPlatform: IS_PLATFORM,
         authenticateWebSocket,
     },
     chat: {

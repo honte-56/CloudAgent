@@ -38,7 +38,7 @@ export type RealtimeClientConnection = {
 /**
  * Authenticated user payload attached to websocket upgrade requests.
  *
- * Platform and OSS auth flows currently use either `id` or `userId`; both are
+ * HTTP and WebSocket auth flows use either `id` or `userId`; both are
  * represented here so websocket handlers can resolve a stable writer user id.
  */
 export type AuthenticatedWebSocketUser = {

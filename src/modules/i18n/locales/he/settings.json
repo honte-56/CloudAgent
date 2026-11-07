@@ -464,7 +464,6 @@
       "updateAvailable": "עדכון זמין: v{{version}}",
       "upToDate": "מעודכנת",
       "bundled": "מגיעה עם CloudAgent ומתעדכנת יחד איתו.",
-      "platform": "מנוהלת על ידי פלטפורמת האירוח.",
       "updateTo": "עדכון ל-v{{version}}",
       "runUpdater": "הפעלת העדכון",
       "updating": "מעדכן…",

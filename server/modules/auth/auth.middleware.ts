@@ -1,15 +1,12 @@
 // @ts-nocheck -- JWT request augmentation is narrowed by Auth route contracts.
 import jwt from 'jsonwebtoken';
 
-import { IS_PLATFORM } from '@/shared/utils.js';
-
-import { userDb, appConfigDb } from '../database/index.js';
+import { userDb, appConfigDb } from '@/modules/database/index.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
-
-// Optional API key middleware
-const validateApiKey = (req, res, next) => {
+/** Used by server bootstrap for optional API-wide key validation. */
+export const validateApiKey = (req, res, next) => {
   // Skip API key validation if not configured
   if (!process.env.API_KEY) {
     return next();
@@ -22,24 +19,10 @@ const validateApiKey = (req, res, next) => {
   next();
 };
 
-// JWT authentication middleware
-const authenticateToken = async (req, res, next) => {
-  // Platform mode:  use single database user
-  if (IS_PLATFORM) {
-    try {
-      const user = userDb.getFirstUser();
-      if (!user) {
-        return res.status(500).json({ error: 'Platform mode: No user found in database' });
-      }
-      req.user = user;
-      return next();
-    } catch (error) {
-      console.error('Platform mode error:', error);
-      return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
-    }
-  }
+/** Used by server bootstrap and Auth routes to authenticate protected HTTP requests. */
+export const authenticateToken = async (req, res, next) => {
 
-  // Normal OSS JWT validation
+  // JWT validation
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
@@ -102,8 +85,8 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
-// Generate JWT token
-const generateToken = (user) => {
+/** Used by Auth's service composition and middleware to issue and refresh local JWTs. */
+export const generateToken = (user) => {
   return jwt.sign(
     {
       userId: user.id,
@@ -114,23 +97,10 @@ const generateToken = (user) => {
   );
 };
 
-// WebSocket authentication function
-const authenticateWebSocket = (token) => {
-  // Platform mode: bypass token validation, return first user
-  if (IS_PLATFORM) {
-    try {
-      const user = userDb.getFirstUser();
-      if (user) {
-        return { id: user.id, userId: user.id, username: user.username };
-      }
-      return null;
-    } catch (error) {
-      console.error('Platform mode WebSocket error:', error);
-      return null;
-    }
-  }
+/** Used by the WebSocket module to apply the same JWT boundary as protected HTTP routes. */
+export const authenticateWebSocket = (token) => {
 
-  // Normal OSS JWT validation
+  // JWT validation
   if (!token) {
     return null;
   }
@@ -152,12 +122,4 @@ const authenticateWebSocket = (token) => {
     }
     return null;
   }
-};
-
-export {
-  validateApiKey,
-  authenticateToken,
-  generateToken,
-  authenticateWebSocket,
-  JWT_SECRET
 };

@@ -71,7 +71,7 @@ await fs.writeFile(path.join(stage, '.deployment.json'), `${JSON.stringify({
   nodeVersion: process.versions.node,
   platform: process.platform,
   arch: process.arch,
-  frontendAuthMode: process.env.VITE_IS_PLATFORM === 'true' ? 'platform' : 'jwt',
+  frontendAuthMode: 'jwt',
   workflowRunId: process.env.GITHUB_RUN_ID,
   builtAt: new Date().toISOString(),
 }, null, 2)}\n`);

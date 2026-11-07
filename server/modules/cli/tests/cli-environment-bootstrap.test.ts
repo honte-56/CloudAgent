@@ -24,7 +24,7 @@ function sourceModuleUrl(...segments: string[]): string {
   return pathToFileURL(path.join(applicationRoot, ...segments)).href;
 }
 
-async function runCliBootstrapFixture(isPlatform: boolean): Promise<BootstrapResult> {
+async function runCliBootstrapFixture(legacyFlag: boolean): Promise<BootstrapResult> {
   const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'cloudcli-cli-bootstrap-'));
   const fixtureServerDirectory = path.join(fixtureRoot, 'server');
   const fixtureCliDirectory = path.join(fixtureServerDirectory, 'modules', 'cli');
@@ -45,7 +45,7 @@ async function runCliBootstrapFixture(isPlatform: boolean): Promise<BootstrapRes
     await writeFile(
       path.join(fixtureRoot, '.env'),
       [
-        `VITE_IS_PLATFORM=${String(isPlatform)}`,
+        `VITE_IS_PLATFORM=${String(legacyFlag)}`,
         `DATABASE_PATH=${fixtureDatabasePath.replace(/\\/g, '/')}`,
       ].join('\n'),
       'utf8',
@@ -157,21 +157,21 @@ export function createCliApplication() {
   }
 }
 
-test('CLI bootstrap selects Platform authentication and cloud runtime from .env', async () => {
+test('CLI bootstrap ignores the obsolete auth flag and requires JWT', async () => {
   const result = await runCliBootstrapFixture(true);
 
   assert.deepEqual(result, {
     command: 'status',
     environmentFileReads: 0,
     mode: 'true',
-    authNextCalled: true,
-    authStatus: 200,
-    authenticatedUsername: 'bootstrap-user',
-    runtime: 'cloud',
+    authNextCalled: false,
+    authStatus: 401,
+    authenticatedUsername: null,
+    runtime: 'local',
   });
 });
 
-test('CLI bootstrap selects OSS authentication and local runtime from .env', async () => {
+test('CLI bootstrap uses JWT authentication and local runtime', async () => {
   const result = await runCliBootstrapFixture(false);
 
   assert.deepEqual(result, {

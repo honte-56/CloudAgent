@@ -9,15 +9,10 @@ import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT } from '@/shared
  * authToken.test.ts covers the primitives; nothing covered the request helper
  * that calls them on every API call in the app.
  *
- * IS_PLATFORM is resolved at module scope from a build-time flag and decides
- * whether the app authenticates with a bearer token at all, so each test loads
- * a fresh copy of api.ts with the flag stubbed. Reading the ambient value would
- * make these tests agree with whatever .env the machine happens to have — this
- * workspace has VITE_IS_PLATFORM=true, CI does not.
+ * Authentication always uses the local JWT, regardless of legacy build flags.
  */
 
-const loadFetch = async (isPlatform: boolean) => {
-  vi.stubEnv('VITE_IS_PLATFORM', isPlatform ? 'true' : 'false');
+const loadFetch = async () => {
   vi.resetModules();
   return (await import('@/shared/api')).authenticatedFetch;
 };
@@ -69,19 +64,20 @@ test('a live token is sent as a bearer credential', async () => {
   localStorage.setItem('auth-token', token);
   respondWith();
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
 });
 
-test('platform builds send no bearer token, because the session is a cookie', async () => {
+test('a legacy deployment flag cannot suppress the bearer credential', async () => {
+  vi.stubEnv('VITE_IS_PLATFORM', 'true');
   const token = liveToken();
   localStorage.setItem('auth-token', token);
   respondWith();
 
-  await (await loadFetch(true))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
-  assert.equal('Authorization' in sentHeaders(), false);
+  assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
 });
 
 test('an expired token is never put on the wire', async () => {
@@ -95,7 +91,7 @@ test('an expired token is never put on the wire', async () => {
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   respondWith();
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal('Authorization' in sentHeaders(), false);
@@ -106,7 +102,7 @@ test('an expired token is never put on the wire', async () => {
 test('no token means no Authorization header at all', async () => {
   respondWith();
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   assert.equal('Authorization' in sentHeaders(), false);
 });
@@ -114,7 +110,7 @@ test('no token means no Authorization header at all', async () => {
 test('a JSON body is labelled as JSON', async () => {
   respondWith();
 
-  await (await loadFetch(false))('/api/projects', { method: 'POST', body: '{"a":1}' });
+  await (await loadFetch())('/api/projects', { method: 'POST', body: '{"a":1}' });
 
   assert.equal(sentHeaders()['Content-Type'], 'application/json');
 });
@@ -124,7 +120,7 @@ test('a FormData body is left for the browser to label', async () => {
   // arrives unparseable.
   respondWith();
 
-  await (await loadFetch(false))('/api/upload', { method: 'POST', body: new FormData() });
+  await (await loadFetch())('/api/upload', { method: 'POST', body: new FormData() });
 
   assert.equal('Content-Type' in sentHeaders(), false);
 });
@@ -132,7 +128,7 @@ test('a FormData body is left for the browser to label', async () => {
 test('a caller header wins over the default', async () => {
   respondWith();
 
-  await (await loadFetch(false))('/api/projects', {
+  await (await loadFetch())('/api/projects', {
     method: 'POST',
     body: 'raw',
     headers: { 'Content-Type': 'text/plain' },
@@ -151,7 +147,7 @@ test('a refreshed token on the response replaces the stored one', async () => {
   window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
   respondWith({ 'X-Refreshed-Token': rotated });
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
   assert.equal(localStorage.getItem('auth-token'), rotated);
@@ -167,7 +163,7 @@ test('an auth error on the response ends the session', async () => {
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   respondWith({ 'X-Auth-Error': 'invalid' }, 401);
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal(expiries, 1);
@@ -187,7 +183,7 @@ test('an auth error replayed by a cached response does not end the session', asy
   // X-Auth-Error as a rejection signed the user out on every start.
   respondWith({ 'X-Auth-Error': 'invalid' }, 200);
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal(expiries, 0);
@@ -202,7 +198,7 @@ test('an expired refreshed token does not replace the stored one', async () => {
   // which the next read then discarded as expired.
   respondWith({ 'X-Refreshed-Token': expiredToken() });
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   assert.equal(localStorage.getItem('auth-token'), live);
 });
@@ -211,7 +207,7 @@ test('requests bypass the HTTP cache', async () => {
   localStorage.setItem('auth-token', liveToken());
   respondWith();
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   // Without this, a cached response replays another session's auth headers.
   assert.equal(lastInit?.cache, 'no-store');
@@ -222,7 +218,7 @@ test('an ordinary response leaves the stored token alone', async () => {
   localStorage.setItem('auth-token', token);
   respondWith();
 
-  await (await loadFetch(false))('/api/projects');
+  await (await loadFetch())('/api/projects');
 
   assert.equal(localStorage.getItem('auth-token'), token);
 });

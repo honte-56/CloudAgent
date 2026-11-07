@@ -1,9 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
-// A touch must begin this close to the left edge to pull a closed drawer out,
-// so ordinary horizontal gestures in the content (code blocks, tables) stay theirs.
-const EDGE_ZONE_PX = 24;
 // Movement before the gesture commits to a direction.
 const DRAG_SLOP_PX = 10;
 // A release faster than this settles in the direction of travel regardless of
@@ -43,6 +40,23 @@ type DrawerDrag = {
 
 type TimerRef = { current: number | null };
 
+// Start anywhere in the main content, away from Android's system back gesture.
+// Editors, controls, overlays and horizontally scrollable content keep their touches.
+function canStartOpeningDrawer(target: EventTarget | null, root: HTMLElement) {
+  if (!(target instanceof Element)) return false;
+  const mainLayer = target.closest('.workspace-main-layer');
+  if (!mainLayer || !root.contains(mainLayer)) return false;
+  if (target.closest('input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [role="menu"], [role="slider"], .xterm, .cm-editor')) return false;
+  if (window.getSelection()?.isCollapsed === false) return false;
+
+  for (let element: Element | null = target; element && element !== root; element = element.parentElement) {
+    if (element.scrollWidth <= element.clientWidth) continue;
+    const overflowX = window.getComputedStyle(element).overflowX;
+    if (overflowX === 'auto' || overflowX === 'scroll') return false;
+  }
+  return true;
+}
+
 // Moves the drawer to a resting side. The main layer only carries a transform
 // while the drawer is out (or on its way in), because a lingering transform
 // would become the containing block of every fixed-position descendant.
@@ -62,7 +76,7 @@ function settleDrawer(root: HTMLElement, toOpen: boolean, settleTimerRef: TimerR
 }
 
 /**
- * Drives the mobile sidebar drawer like a physical sheet: an edge swipe pulls it
+ * Drives the mobile sidebar drawer like a physical sheet: a right swipe pulls it
  * out, a swipe on the open drawer or its scrim pushes it back, and the drawer
  * follows the finger 1:1 before springing to whichever side the release favours.
  */
@@ -104,6 +118,13 @@ export function useSidebarDrawerGesture({
 
     let drag: DrawerDrag | null = null;
 
+    const cancelDrag = () => {
+      const wasDragging = drag?.dragging;
+      drag = null;
+      delete root.dataset.drawerDragging;
+      if (wasDragging) settleDrawer(root, openRef.current, settleTimerRef);
+    };
+
     const endDrag = () => {
       const finished = drag;
       drag = null;
@@ -126,14 +147,14 @@ export function useSidebarDrawerGesture({
     };
 
     const handleTouchStart = (event: TouchEvent) => {
+      cancelDrag();
       if (event.touches.length !== 1) {
-        drag = null;
         return;
       }
       const touch = event.touches[0];
       const isOpen = openRef.current;
       const drawerLayer = panelRef.current?.parentElement;
-      if (!isOpen && touch.clientX > EDGE_ZONE_PX) return;
+      if (!isOpen && !canStartOpeningDrawer(event.target, root)) return;
       if (isOpen && !(drawerLayer && event.target instanceof Node && drawerLayer.contains(event.target))) return;
 
       drag = {
@@ -148,6 +169,10 @@ export function useSidebarDrawerGesture({
 
     const handleTouchMove = (event: TouchEvent) => {
       if (!drag) return;
+      if (event.touches.length !== 1) {
+        cancelDrag();
+        return;
+      }
       const touch = event.touches[0];
       if (!touch) return;
       const dx = touch.clientX - drag.startX;
@@ -187,12 +212,12 @@ export function useSidebarDrawerGesture({
     root.addEventListener('touchstart', handleTouchStart, { passive: true });
     root.addEventListener('touchmove', handleTouchMove, { passive: false });
     root.addEventListener('touchend', endDrag);
-    root.addEventListener('touchcancel', endDrag);
+    root.addEventListener('touchcancel', cancelDrag);
     return () => {
       root.removeEventListener('touchstart', handleTouchStart);
       root.removeEventListener('touchmove', handleTouchMove);
       root.removeEventListener('touchend', endDrag);
-      root.removeEventListener('touchcancel', endDrag);
+      root.removeEventListener('touchcancel', cancelDrag);
       delete root.dataset.drawerDragging;
     };
   }, [enabled, panelRef, rootRef, setOpen]);

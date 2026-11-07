@@ -143,7 +143,7 @@ function QuickSettingsPanelView({ selectedProject, onInsertCommand }: QuickSetti
         role="tabpanel"
         id={getQuickSettingsTabPanelId(activeTab)}
         aria-labelledby={getQuickSettingsTabId(activeTab)}
-        className="flex min-h-0 flex-1 flex-col"
+        className="flex min-h-0 flex-1 flex-col bg-background pb-safe-area-inset-bottom"
       >
         {activeTab === 'settings' ? (
           <QuickSettingsContent
@@ -184,7 +184,10 @@ function QuickSettingsPanelView({ selectedProject, onInsertCommand }: QuickSetti
         )
       ) : (
         <div
-          className={`squircle fixed right-0 top-0 z-[9999] h-full w-64 transform overflow-hidden rounded-l-4xl bg-card shadow-floating transition-transform duration-spring-smooth ease-spring-smooth ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
+          className={`squircle fixed right-0 z-[9999] w-64 transform overflow-hidden rounded-tl-4xl bg-card shadow-floating transition-transform duration-spring-smooth ease-spring-smooth md:rounded-l-4xl ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+          // On mobile, meet the viewport's bottom edge without a rounded gap;
+          // only the contents avoid the home indicator. Follow the keyboard too.
+          style={{ top: 'var(--safe-area-inset-top, 0px)', bottom: 'var(--keyboard-height, 0px)' }}
         >
           {panelBody}
         </div>
@@ -192,7 +195,7 @@ function QuickSettingsPanelView({ selectedProject, onInsertCommand }: QuickSetti
 
       {isOpen && !isPinned && (
         <div
-          className="animate-fade-in fixed inset-0 z-[9998] bg-[hsl(var(--scrim))]"
+          className="animate-fade-in fixed inset-x-0 bottom-0 top-0 z-[9998] bg-[hsl(var(--scrim))]"
           onClick={close}
         />
       )}

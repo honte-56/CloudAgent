@@ -18,6 +18,7 @@ import {
     reapOrphanedOpenCodeServers,
 } from '@/modules/providers/index.js';
 import { chatRunRegistry, createWebSocketServer } from '@/modules/websocket/index.js';
+import { createStaticAssetsRouter } from '@/modules/static-assets/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -207,6 +208,8 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/voice', authenticateToken, voiceRoutes);
 
 // Serve public files (like api-docs.html)
+// The built worker must take precedence over public/sw.js's development template.
+app.use(createStaticAssetsRouter(APP_ROOT));
 app.use(express.static(path.join(APP_ROOT, 'public')));
 
 // Static files served after API routes

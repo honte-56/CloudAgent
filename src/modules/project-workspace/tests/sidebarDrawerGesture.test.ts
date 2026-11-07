@@ -1,4 +1,6 @@
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
+import { createElement, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { useSidebarDrawerGesture } from '@/modules/project-workspace/hooks/useSidebarDrawerGesture';
@@ -222,4 +224,28 @@ test('disabling mobile gestures cancels queued frames and removes transient styl
   expect(panel.style.transform).toBe('');
   expect(main.style.transform).toBe('');
   expect(layer.dataset.drawerVisible).toBeUndefined();
+});
+
+test('the drawer binds on first mount when the workspace ref belongs to its parent', () => {
+  function Drawer({ rootRef, open, setOpen }: { rootRef: RefObject<HTMLDivElement>; open: boolean; setOpen: (value: boolean) => void }) {
+    const panelRef = useRef<HTMLElement>(null);
+    useSidebarDrawerGesture({ enabled: true, open, setOpen, rootRef, panelRef });
+    return createElement('aside', { 'data-open': open }, createElement('nav', { ref: panelRef }));
+  }
+  function Workspace() {
+    const rootRef = useRef<HTMLDivElement>(null);
+    // Models the parent-owned open state used by the actual workspace.
+    const [open, setOpen] = useState(false);
+    return createElement('div', { ref: rootRef },
+      createElement(Drawer, { rootRef, open, setOpen }),
+      createElement('main', { className: 'workspace-main-layer' }, createElement('p', null, 'Conversation')),
+    );
+  }
+  const { container } = render(createElement(Workspace));
+  const target = container.querySelector('p')!;
+  touch(target, 'touchstart', 100, 300, 0);
+  touch(target, 'touchmove', 300, 300, 100);
+  touch(target, 'touchend', 300, 300, 110, 0);
+  expect(container.querySelector('aside')?.getAttribute('data-open')).toBe('true');
+  expect(container.querySelector('nav')?.style.transform).toBe('translate3d(0%, 0, 0)');
 });

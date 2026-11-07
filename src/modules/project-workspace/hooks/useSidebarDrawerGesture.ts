@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
 const DRAG_SLOP_PX = 10;
@@ -69,7 +69,9 @@ export function useSidebarDrawerGesture({ enabled, open, setOpen, rootRef, panel
     setOpenRef.current = setOpen;
   }, [open, setOpen]);
 
-  useLayoutEffect(() => {
+  // The workspace ref belongs to a parent host element. Its ref is attached
+  // after this child's layout effects, so bind only after the entire commit.
+  useEffect(() => {
     const root = rootRef.current;
     const panel = panelRef.current;
     const layer = panel?.parentElement;

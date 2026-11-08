@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { api } from '@/shared/api';
 import type {
@@ -18,6 +18,7 @@ const createInitialProviderAuthStatusMap = (loading = true): ProviderAuthStatusM
 });
 
 type ProviderAuthStatusPayload = {
+  installed?: boolean;
   authenticated?: boolean;
   email?: string | null;
   method?: string | null;
@@ -42,6 +43,7 @@ const toProviderAuthStatus = (
   payload: ProviderAuthStatusPayload,
   fallbackError: string | null = null,
 ): ProviderAuthStatus => ({
+  ...(typeof payload.installed === 'boolean' ? { installed: payload.installed } : {}),
   authenticated: Boolean(payload.authenticated),
   email: payload.email ?? null,
   method: payload.method ?? null,
@@ -60,12 +62,17 @@ type UseProviderAuthStatusOptions = {
   initialLoading?: boolean;
 };
 
+/** Used by settings, onboarding and chat to check CLI installation and sign-in status. */
 export function useProviderAuthStatus(
   { initialLoading = true }: UseProviderAuthStatusOptions = {},
 ) {
+  // Each consumer keeps the latest result for each CLI while checks complete independently.
   const [providerAuthStatus, setProviderAuthStatus] = useState<ProviderAuthStatusMap>(() => (
     createInitialProviderAuthStatusMap(initialLoading)
   ));
+
+  // Reopening the model picker or completing login can supersede a slow earlier check.
+  const requestIds = useRef<Partial<Record<LLMProvider, number>>>({});
 
   const setProviderLoading = useCallback((provider: LLMProvider) => {
     setProviderAuthStatus((previous) => ({
@@ -86,7 +93,14 @@ export function useProviderAuthStatus(
   }, []);
 
   const checkProviderAuthStatus = useCallback(async (provider: LLMProvider): Promise<ProviderAuthStatus> => {
+    const requestId = (requestIds.current[provider] ?? 0) + 1;
+    requestIds.current[provider] = requestId;
     setProviderLoading(provider);
+    const publishStatus = (status: ProviderAuthStatus) => {
+      if (requestIds.current[provider] === requestId) {
+        setProviderStatus(provider, status);
+      }
+    };
 
     try {
       const response = await api.providers.authStatus(provider);
@@ -99,13 +113,13 @@ export function useProviderAuthStatus(
           loading: false,
           error: FALLBACK_STATUS_ERROR,
         };
-        setProviderStatus(provider, status);
+        publishStatus(status);
         return status;
       }
 
       const payload = (await response.json()) as ProviderAuthStatusApiResponse;
       const status = toProviderAuthStatus(payload.data);
-      setProviderStatus(provider, status);
+      publishStatus(status);
       return status;
     } catch (caughtError) {
       console.error(`Error checking ${provider} auth status:`, caughtError);
@@ -116,7 +130,7 @@ export function useProviderAuthStatus(
         loading: false,
         error: toErrorMessage(caughtError),
       };
-      setProviderStatus(provider, status);
+      publishStatus(status);
       return status;
     }
   }, [setProviderLoading, setProviderStatus]);

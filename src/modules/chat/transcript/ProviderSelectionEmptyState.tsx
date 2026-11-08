@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { useProviderAuthStatus } from '@/modules/provider-auth';
 import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
 import { filterVisibleModels } from '@/shared/utils';
 import type {
@@ -105,6 +106,7 @@ export default function ProviderSelectionEmptyState({
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const { visibleModels } = useModelVisibility();
+  const { providerAuthStatus, refreshProviderAuthStatuses } = useProviderAuthStatus();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
 
@@ -124,15 +126,28 @@ export default function ProviderSelectionEmptyState({
     }
   }, []);
 
-  /** One collapsible branch per provider, in the order the picker lists them. */
+  // Opening the picker rechecks availability after CLI login or configuration changes.
+  useEffect(() => {
+    if (dialogOpen) {
+      void refreshProviderAuthStatuses();
+    }
+  }, [dialogOpen, refreshProviderAuthStatuses]);
+
+  const availableProviders = useMemo(() => PROVIDER_META.filter(({ id }) => {
+    const status = providerAuthStatus[id];
+    return status.authenticated && status.installed !== false && !status.error && !status.loading;
+  }), [providerAuthStatus]);
+  const checkingAvailability = Object.values(providerAuthStatus).some((status) => status.loading);
+
+  /** Only usable providers with models become branches in the conversation picker. */
   const visibleProviderGroups = useMemo<ModelGroup[]>(
-    () => PROVIDER_META.map((meta) => ({
+    () => availableProviders.map((meta) => ({
       key: meta.id,
       provider: meta.id,
       name: meta.name,
       models: filterVisibleModels(providerModelCatalog[meta.id]?.OPTIONS ?? [], visibleModels[meta.id]),
-    })),
-    [providerModelCatalog, visibleModels],
+    })).filter((group) => group.models.length > 0 || providerModelsLoading),
+    [availableProviders, providerModelCatalog, providerModelsLoading, visibleModels],
   );
 
   /**
@@ -141,13 +156,13 @@ export default function ProviderSelectionEmptyState({
    * rather than promising built-in models there.
    */
   const customOnlyGroupNames = useMemo(
-    () => PROVIDER_META
+    () => visibleProviderGroups
       .filter((meta) => {
-        const catalog = providerModelCatalog[meta.id];
+        const catalog = providerModelCatalog[meta.provider];
         return catalog?.CUSTOM_MODELS_ONLY === true && catalog.OPTIONS.some((option) => option.isCustom);
       })
       .map((meta) => meta.name),
-    [providerModelCatalog],
+    [providerModelCatalog, visibleProviderGroups],
   );
 
   const nextTaskPrompt = t("tasks.nextTaskPrompt", {
@@ -271,9 +286,13 @@ export default function ProviderSelectionEmptyState({
                 />
                 <CommandList className="max-h-[350px]">
                   <CommandEmpty>
-                    {t("providerSelection.noModelsFound", {
-                      defaultValue: "No models found.",
-                    })}
+                    {checkingAvailability || providerModelsLoading
+                      ? t("providerSelection.checkingAvailability", { defaultValue: "Checking available agents…" })
+                      : visibleProviderGroups.length === 0
+                        ? t("providerSelection.noAvailableProviders", {
+                          defaultValue: "No agents are available. Sign in to an installed agent in Settings.",
+                        })
+                        : t("providerSelection.noModelsFound", { defaultValue: "No models found." })}
                   </CommandEmpty>
                   <ModelGroupList
                     groups={visibleProviderGroups}

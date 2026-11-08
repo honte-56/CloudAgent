@@ -64,6 +64,7 @@ vi.mock('@/shared/api', () => ({
       savePreferences: () => okJson({ success: true, preferences: {} }),
     },
     providers: {
+      authStatus: () => okJson({ success: true, data: { installed: true, authenticated: true } }),
       models: (provider: LLMProvider) => okJson({
         success: true,
         data: provider === 'claude' ? { models: MERGED_CATALOG } : null,
@@ -318,7 +319,7 @@ test('a rejected toggle surfaces the server error and leaves the catalog alone',
   assert.equal(result.current.currentProviderModel, 'default');
 });
 
-test('the model picker says which providers list only your models', () => {
+test('the model picker says which providers list only your models', async () => {
   // jsdom ships no ResizeObserver or scrollIntoView, which the picker's cmdk list uses.
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
@@ -366,6 +367,6 @@ test('the model picker says which providers list only your models', () => {
   flagWithoutModels.unmount();
 
   renderPicker({ claude: CUSTOM_ONLY_CATALOG, codex });
-  screen.getByText('Only your models are listed for Anthropic');
+  await screen.findByText('Only your models are listed for Anthropic');
   assert.equal(isShown('Built-in and custom models in one list'), false);
 });

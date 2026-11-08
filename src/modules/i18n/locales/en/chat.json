@@ -234,6 +234,8 @@
     "addModel": "Add model",
     "searchModels": "Search models...",
     "manageModels": "Manage models",
+    "checkingAvailability": "Checking available agents…",
+    "noAvailableProviders": "No agents are available. Sign in to an installed agent in Settings.",
     "noModelsFound": "No models found.",
     "loadingModels": "Loading models…",
     "clickToChange": "Click to change model"

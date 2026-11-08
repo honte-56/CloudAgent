@@ -1,4 +1,8 @@
 {
+  "providerSelection": {
+    "checkingAvailability": "正在檢查可用管道…",
+    "noAvailableProviders": "暫無可用管道，請在設定中安裝並登入智慧體。"
+  },
   "codeBlock": {
     "copy": "複製",
     "copied": "已複製",

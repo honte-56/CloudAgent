@@ -1,4 +1,8 @@
 {
+  "providerSelection": {
+    "checkingAvailability": "正在检查可用渠道…",
+    "noAvailableProviders": "暂无可用渠道，请在设置中安装并登录智能体。"
+  },
   "codeBlock": {
     "copy": "复制",
     "copied": "已复制",

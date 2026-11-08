@@ -1348,8 +1348,10 @@ export type ProviderAuthSubscriptionOverride = {
   subscriptionEmail: string | null;
 };
 
-/** Sign-in state of one LLM provider CLI - whether it is authenticated, the account email and method, plus in-flight loading and error state - polled by the provider-auth module and rendered by the settings and onboarding account views. `subscriptionOverride` is only present when an API key is bypassing a valid subscription login. */
+/** Sign-in state of one LLM provider CLI - whether it is authenticated, the account email and method, plus in-flight loading and error state - checked by the provider-auth module, rendered by settings and onboarding, and used to hide unavailable conversation channels. `subscriptionOverride` is only present when an API key is bypassing a valid subscription login. */
 export type ProviderAuthStatus = {
+  /** Explicit installation status; older servers may omit it. */
+  installed?: boolean;
   authenticated: boolean;
   email: string | null;
   method: string | null;

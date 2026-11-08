@@ -16,6 +16,7 @@ vi.mock('@/shared/api', () => ({ api: {
     preferences: () => response({ success: true, preferences: mocks.serverPreferences }),
   },
   providers: {
+    authStatus: () => response({ success: true, data: { installed: true, authenticated: true } }),
     models: (provider: string) => response({ success: true, data: { models: {
       DEFAULT: `${provider}/default`,
       OPTIONS: [{ value: `${provider}/default`, label: 'Default' }, { value: `${provider}/chosen`, label: 'Chosen' }],
@@ -114,6 +115,7 @@ test('the new conversation picker filters its provider groups', async () => {
     providerModelsLoading={false} tasksEnabled={false} isTaskMasterInstalled={null} setInput={() => {}}
   />);
   fireEvent.click(screen.getByRole('button', { name: /Click to change model/ }));
+  await screen.findByRole('option');
   const choices = screen.getAllByRole('option');
   expect(choices).toHaveLength(1);
   expect(choices[0].textContent).toContain('opencode/chosen');

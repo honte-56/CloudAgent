@@ -39,6 +39,7 @@ export default function AgentCategoryTabsSection({
             )}
           >
             {category === 'account' && t('tabs.account')}
+            {category === 'models' && t('tabs.models')}
             {category === 'permissions' && t('tabs.permissions')}
             {category === 'mcp' && t('tabs.mcpServers')}
             {category === 'skills' && t('tabs.skills', {

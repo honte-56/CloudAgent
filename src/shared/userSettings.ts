@@ -29,6 +29,11 @@ export type UserPreferences = {
   uiPreferences: unknown;
   selectedProvider: string;
   defaultProjectDirectory: string;
+  /** Null shows all models; each agent keeps its own account-backed selection. */
+  claudeVisibleModels: string[] | null;
+  cursorVisibleModels: string[] | null;
+  codexVisibleModels: string[] | null;
+  opencodeVisibleModels: string[] | null;
 };
 
 export type UserPreferenceKey = keyof UserPreferences;
@@ -69,6 +74,10 @@ const LEGACY_STORAGE_KEYS: Record<UserPreferenceKey, string> = {
   uiPreferences: 'uiPreferences',
   selectedProvider: 'selected-provider',
   defaultProjectDirectory: 'default-project-directory',
+  claudeVisibleModels: '',
+  cursorVisibleModels: '',
+  codexVisibleModels: '',
+  opencodeVisibleModels: '',
 };
 
 const PREFERENCE_KEYS = Object.keys(LEGACY_STORAGE_KEYS) as UserPreferenceKey[];
@@ -171,6 +180,20 @@ export function writeUserPreference(key: UserPreferenceKey, value: unknown): voi
   notifyListeners();
 }
 
+/** Saves an explicit settings action before publishing it to the mirror and subscribers. */
+export async function saveUserPreference(key: UserPreferenceKey, value: unknown): Promise<void> {
+  const response = await api.user.savePreferences({ [key]: value });
+  if (!response.ok) {
+    throw new Error('Unable to save user preference.');
+  }
+
+  // A confirmed save supersedes any older debounced write for this key.
+  delete pendingServerWrites[key];
+  preferences = { ...preferences, [key]: value };
+  writeMirror();
+  notifyListeners();
+}
+
 /** Writes several preferences as one change, so listeners re-render once. */
 export function writeUserPreferences(updates: PreferenceRecord): void {
   const changed: PreferenceRecord = {};
@@ -205,9 +228,13 @@ export function subscribeToUserPreferences(listener: () => void): () => void {
  * `claudePermissions` are pulled out of it separately.
  */
 function readLegacyPreference(key: UserPreferenceKey): unknown {
+  const legacyKey = LEGACY_STORAGE_KEYS[key];
+  if (!legacyKey) {
+    return undefined;
+  }
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(LEGACY_STORAGE_KEYS[key]);
+    raw = localStorage.getItem(legacyKey);
   } catch {
     return undefined;
   }

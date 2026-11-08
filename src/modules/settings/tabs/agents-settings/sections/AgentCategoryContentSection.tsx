@@ -2,6 +2,7 @@ import type { AgentCategory, AgentContextByProvider, AgentProvider, AgentSetting
 import { McpServers } from '@/modules/mcp';
 import { ProviderSkills } from '@/modules/skills';
 import AccountContent from '@/modules/settings/tabs/agents-settings/sections/content/AccountContent';
+import ModelsContent from '@/modules/settings/tabs/agents-settings/sections/content/ModelsContent';
 import PermissionsContent from '@/modules/settings/tabs/agents-settings/sections/content/PermissionsContent';
 
 type AgentCategoryContentSectionProps = {
@@ -39,6 +40,8 @@ export default function AgentCategoryContentSection({
           onLogin={agentContextById[selectedAgent].onLogin}
         />
       )}
+
+      {selectedCategory === 'models' && <ModelsContent key={selectedAgent} provider={selectedAgent} />}
 
       {selectedCategory === 'permissions' && selectedAgent === 'claude' && (
         <PermissionsContent

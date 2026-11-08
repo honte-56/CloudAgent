@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
+import { filterVisibleModels } from '@/shared/utils';
 import { api } from '@/shared/api';
 import type { PendingPermissionRequest, PermissionMode,
   ProjectSession,
@@ -166,6 +168,20 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     Partial<Record<LLMProvider, ProviderModelsDefinition>>
   >({});
   const [providerModelsLoading, setProviderModelsLoading] = useState(true);
+
+  const { visibleModels } = useModelVisibility();
+  // Keep full metadata for session models and the library; only choices and new-chat defaults are filtered.
+  const visibleModelCatalog = useMemo(() => Object.fromEntries(
+    Object.entries(providerModelCatalog).map(([id, catalog]) => {
+      const options = filterVisibleModels(catalog.OPTIONS, visibleModels[id as LLMProvider]);
+      return [id, {
+        ...catalog,
+        OPTIONS: options,
+        DEFAULT: options.some((option) => option.value === catalog.DEFAULT)
+          ? catalog.DEFAULT : options[0]?.value ?? catalog.DEFAULT,
+      }];
+    }),
+  ) as Partial<Record<LLMProvider, ProviderModelsDefinition>>, [providerModelCatalog, visibleModels]);
 
   const providerModelsRequestIdRef = useRef(0);
   const sessionSelectionLoadRequestIdRef = useRef(0);
@@ -354,7 +370,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     const reconciledModels: Partial<Record<LLMProvider, string>> = {};
 
     for (const targetProvider of PROVIDERS) {
-      const catalog = providerModelCatalog[targetProvider];
+      const catalog = visibleModelCatalog[targetProvider];
       if (!catalog) {
         continue;
       }
@@ -374,7 +390,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     if (Object.keys(reconciledModels).length > 0) {
       setProviderModels((previous) => ({ ...previous, ...reconciledModels }));
     }
-  }, [providerModelCatalog, providerModels]);
+  }, [visibleModelCatalog, providerModels]);
 
   useEffect(() => {
     const nextEfforts: Partial<Record<LLMProvider, string>> = {};
@@ -694,8 +710,8 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     );
   }, [activeSessionSelection?.effort, currentProviderModel, provider, providerEfforts, reconcileStoredEffort]);
   const currentProviderModelOptions = useMemo(
-    () => providerModelCatalog[provider]?.OPTIONS ?? [],
-    [provider, providerModelCatalog],
+    () => visibleModelCatalog[provider]?.OPTIONS ?? [],
+    [provider, visibleModelCatalog],
   );
 
   const applyProviderCatalog = useCallback((

@@ -1,11 +1,31 @@
 {
   "title": "Settings",
   "tabs": {
+    "models": "Models",
     "account": "Account",
     "permissions": "Permissions",
     "mcpServers": "MCP Servers",
     "skills": "Skills",
     "appearance": "Appearance"
+  },
+  "models": {
+    "title": "Models shown in chat",
+    "description": "Choose which models appear in conversation model pickers. Save separately for each agent; existing sessions keep their current model.",
+    "loading": "Loading models…",
+    "loadFailed": "Unable to load models.",
+    "retry": "Retry",
+    "empty": "No models are currently available for this agent.",
+    "search": "Search model name or ID…",
+    "count": "{{selected}} of {{total}} selected",
+    "selectAll": "Show all",
+    "clear": "Clear selection",
+    "unavailable": "Your saved models are currently unavailable. All available models are shown until you choose again.",
+    "noResults": "No matching models.",
+    "minimum": "Select at least one model.",
+    "saveFailed": "Could not save. Your changes are still here; please retry.",
+    "saved": "Saved. Conversation model lists have been updated.",
+    "saving": "Saving…",
+    "save": "Save models"
   },
   "account": {
     "title": "Account",

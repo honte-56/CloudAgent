@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
+import type { Project, ProjectSession, ProviderModelOption, QuickSettingsTab, SlashCommand } from '@/shared/types';
 
 //----------------- TAILWIND CLASS COMPOSITION ------------
 
@@ -260,3 +260,20 @@ export function stripRuntimeInstructions(text: string): string {
 }
 
 // ---------------------------
+
+// ---------------------------
+
+//----------------- MODEL VISIBILITY ------------
+
+/** Filters conversation choices; missing or entirely unavailable selections keep the catalog usable. */
+export function filterVisibleModels(
+  options: ProviderModelOption[],
+  selection: string[] | null,
+): ProviderModelOption[] {
+  if (!Array.isArray(selection) || selection.length === 0) {
+    return options;
+  }
+  const selected = new Set(selection);
+  const visible = options.filter((option) => selected.has(option.value));
+  return visible.length > 0 ? visible : options;
+}

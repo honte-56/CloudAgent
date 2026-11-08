@@ -2,6 +2,8 @@ import React, { useCallback, useMemo, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
+import { filterVisibleModels } from '@/shared/utils';
 import type {
   ProjectSession,
   LLMProvider,
@@ -102,6 +104,7 @@ export default function ProviderSelectionEmptyState({
   setInput,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
+  const { visibleModels } = useModelVisibility();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
 
@@ -127,9 +130,9 @@ export default function ProviderSelectionEmptyState({
       key: meta.id,
       provider: meta.id,
       name: meta.name,
-      models: providerModelCatalog[meta.id]?.OPTIONS ?? [],
+      models: filterVisibleModels(providerModelCatalog[meta.id]?.OPTIONS ?? [], visibleModels[meta.id]),
     })),
-    [providerModelCatalog],
+    [providerModelCatalog, visibleModels],
   );
 
   /**

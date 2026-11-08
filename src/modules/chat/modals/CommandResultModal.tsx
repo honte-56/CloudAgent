@@ -18,6 +18,8 @@ import {
   X,
 } from 'lucide-react';
 
+import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
+import { filterVisibleModels } from '@/shared/utils';
 import { Badge, Button, Dialog, DialogContent, DialogTitle, Input } from '@/shared/ui';
 import type {
   LLMProvider,
@@ -250,6 +252,7 @@ function ModelsContent({
   const [pendingSessionModel, setPendingSessionModel] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
+  const { visibleModels } = useModelVisibility();
   const currentProvider = (data?.current?.provider || 'claude') as LLMProvider;
   const currentModel = activeProvider === currentProvider
     ? activeProviderModel
@@ -258,16 +261,16 @@ function ModelsContent({
   const liveDefinition = providerModelCatalog[currentProvider];
   const availableOptions = useMemo<ProviderModelOption[]>(() => {
     if (liveDefinition?.OPTIONS && liveDefinition.OPTIONS.length > 0) {
-      return liveDefinition.OPTIONS;
+      return filterVisibleModels(liveDefinition.OPTIONS, visibleModels[currentProvider]);
     }
 
     if (Array.isArray(data?.availableOptions) && data.availableOptions.length > 0) {
-      return data.availableOptions;
+      return filterVisibleModels(data.availableOptions, visibleModels[currentProvider]);
     }
 
     const availableModels = Array.isArray(data?.availableModels) ? data.availableModels : [];
-    return availableModels.map((model) => ({ value: model, label: model }));
-  }, [data, liveDefinition]);
+    return filterVisibleModels(availableModels.map((model) => ({ value: model, label: model })), visibleModels[currentProvider]);
+  }, [data, liveDefinition, visibleModels, currentProvider]);
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {

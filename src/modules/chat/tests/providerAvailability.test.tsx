@@ -1,12 +1,13 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
+import { refreshProviderAvailability, useProviderAuthStatus } from '@/modules/provider-auth';
 import { i18n } from '@/modules/i18n';
 import ProviderSelectionEmptyState from '@/modules/chat/transcript/ProviderSelectionEmptyState';
 import type { LLMProvider, ProviderModelActions, ProviderModelsDefinition } from '@/shared/types';
 import { resetUserPreferences, writeUserPreference } from '@/shared/userSettings';
 
-const mocks = vi.hoisted(() => ({ auth: vi.fn() }));
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), selectModel: vi.fn() }));
 vi.mock('@/shared/api', () => ({ api: {
   providers: { authStatus: mocks.auth },
   user: { savePreferences: async () => ({ ok: true }) },
@@ -32,7 +33,7 @@ function renderPicker(catalog = CATALOG) {
     selectedSession={null} currentSessionId={null} provider="claude" setProvider={() => {}}
     textareaRef={{ current: null }}
     providerModels={{ claude: 'claude-primary', codex: 'codex-primary', cursor: 'cursor-primary', opencode: 'opencode-primary' }}
-    setProviderModel={() => {}} providerModelCatalog={catalog} providerModelActions={ACTIONS}
+    setProviderModel={mocks.selectModel} providerModelCatalog={catalog} providerModelActions={ACTIONS}
     providerModelsLoading={false} tasksEnabled={false} isTaskMasterInstalled={null} setInput={() => {}}
   />);
 }
@@ -42,10 +43,12 @@ function openPicker() {
 
 beforeEach(async () => {
   localStorage.clear();
+  sessionStorage.clear();
   resetUserPreferences();
   await i18n.changeLanguage('en');
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
+  mocks.selectModel.mockReset();
   mocks.auth.mockReset().mockImplementation(() => status({ installed: true, authenticated: true }));
 });
 afterEach(() => {
@@ -59,7 +62,7 @@ test('hides logged-out and uninstalled channels while retaining chosen models fo
   }));
   writeUserPreference('opencodeVisibleModels', ['opencode-primary']);
   renderPicker();
-  expect(mocks.auth).not.toHaveBeenCalled();
+  expect(mocks.auth).toHaveBeenCalledTimes(4);
   openPicker();
   await screen.findByText('OpenCode');
   expect(screen.queryByText('Anthropic')).toBeNull();
@@ -104,7 +107,7 @@ test('pending checks do not expose channels or show an empty-results error', asy
   expect(screen.getAllByRole('option')).toHaveLength(8);
 });
 
-test('reopening checks again so a newly logged-in channel appears without reloading the page', async () => {
+test('settings login publishes new availability without waiting for the picker to reopen', async () => {
   let signedIn = false;
   mocks.auth.mockImplementation((provider: LLMProvider) => status({
     installed: true, authenticated: provider !== 'cursor' || signedIn,
@@ -113,12 +116,48 @@ test('reopening checks again so a newly logged-in channel appears without reload
   openPicker();
   await screen.findByText('OpenCode');
   expect(screen.queryByText('Cursor')).toBeNull();
+  const auth = renderHook(() => useProviderAuthStatus());
+  signedIn = true;
+  await act(async () => { await auth.result.current.checkProviderAuthStatus('cursor'); });
+  expect(screen.getByText('Cursor')).toBeTruthy();
+  expect(mocks.auth).toHaveBeenCalledTimes(5);
+});
+
+test('cached menus stay immediately browsable and selectable during slow background refreshes', async () => {
+  const view = renderPicker();
+  await act(async () => { await refreshProviderAvailability(); });
+  view.unmount();
+  let finishRefresh!: (value: Awaited<ReturnType<typeof status>>) => void;
+  const pending = new Promise<Awaited<ReturnType<typeof status>>>((resolve) => { finishRefresh = resolve; });
+  mocks.auth.mockReturnValue(pending);
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+  // A new conversation reuses the tab's snapshot while the background probe is still pending.
+  renderPicker();
+  expect(mocks.auth).toHaveBeenCalledTimes(8);
+  openPicker();
+  expect(screen.getAllByRole('option')).toHaveLength(8);
+  expect(screen.queryByText('Checking available agents…')).toBeNull();
   fireEvent.keyDown(document, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  signedIn = true;
   openPicker();
-  await screen.findByText('Cursor');
+  expect(screen.getAllByRole('option')).toHaveLength(8);
   expect(mocks.auth).toHaveBeenCalledTimes(8);
+  fireEvent.click(screen.getByRole('option', { name: /opencode primary/ }));
+  expect(mocks.selectModel).toHaveBeenCalledWith('opencode', 'opencode-primary');
+  await act(async () => { finishRefresh(await status({ installed: true, authenticated: true })); });
+  clock.mockRestore();
+});
+
+test('opening and reopening a warm menu launches no availability requests', async () => {
+  renderPicker();
+  await act(async () => { await refreshProviderAvailability(); });
+  openPicker();
+  expect(screen.getAllByRole('option')).toHaveLength(8);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  openPicker();
+  expect(screen.getAllByRole('option')).toHaveLength(8);
+  expect(mocks.auth).toHaveBeenCalledTimes(4);
 });
 
 test('an empty availability result explains how to configure a channel', async () => {

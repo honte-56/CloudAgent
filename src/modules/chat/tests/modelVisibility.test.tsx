@@ -29,6 +29,7 @@ vi.mock('@/shared/api', () => ({ api: {
 beforeEach(async () => {
   await i18n.changeLanguage('en');
   localStorage.clear();
+  sessionStorage.clear();
   resetUserPreferences();
   mocks.sessionModel = null;
   mocks.serverPreferences = {};

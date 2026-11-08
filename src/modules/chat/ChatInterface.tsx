@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
+import { refreshProviderAvailability } from '@/modules/provider-auth';
 import { useTasksSettings } from '@/modules/task-master';
 import { usePaletteOpsRegister } from '@/modules/command-palette';
 import { useWebSocket } from '@/shared/context/WebSocketContext';
@@ -76,6 +77,8 @@ function ChatInterface({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
+  // Warm availability while the conversation loads, before the user opens a model menu.
+  useEffect(() => { void refreshProviderAvailability(); }, []);
   const processingSessions = useProcessingSessions();
   const {
     markSessionProcessing: onSessionProcessing,

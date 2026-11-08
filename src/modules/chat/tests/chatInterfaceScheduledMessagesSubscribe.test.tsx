@@ -17,6 +17,7 @@ import type { Project, ProjectSession, ServerEvent } from '@/shared/types';
 
 const harness = vi.hoisted(() => ({
   sessionId: 'session-a',
+  prefetchAvailability: vi.fn(async () => {}),
   // The websocket context's own function; ChatInterface must pass this one on, not a stand-in.
   subscribe: (_listener: (event: ServerEvent) => void) => () => {},
   useScheduledMessages: vi.fn((_sessionId: string | null, _subscribe?: unknown) => ({
@@ -41,6 +42,7 @@ vi.mock('@/shared/context/SessionProtectionContext', () => ({
     getSessionActivity: () => null,
   }),
 }));
+vi.mock('@/modules/provider-auth', () => ({ refreshProviderAvailability: harness.prefetchAvailability }));
 vi.mock('@/modules/task-master', () => ({
   useTasksSettings: () => ({ tasksEnabled: false, isTaskMasterInstalled: false }),
 }));
@@ -91,4 +93,11 @@ test('ChatInterface gives useScheduledMessages the websocket subscribe, so the b
       'useScheduledMessages must get the websocket context\'s subscribe, or scheduled_messages_changed is never heard',
     );
   }
+});
+
+
+test('ChatInterface warms provider availability before any model menu is opened', () => {
+  harness.prefetchAvailability.mockClear();
+  render(<ChatInterface isActive selectedProject={project} selectedSession={session} ws={null} sendMessage={() => {}} />);
+  assert.equal(harness.prefetchAvailability.mock.calls.length, 1);
 });

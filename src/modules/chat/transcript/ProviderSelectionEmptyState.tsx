@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 
-import { useProviderAuthStatus } from '@/modules/provider-auth';
+import { useProviderAvailability } from '@/modules/provider-auth';
 import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
 import { filterVisibleModels } from '@/shared/utils';
 import type {
@@ -106,7 +106,7 @@ export default function ProviderSelectionEmptyState({
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const { visibleModels } = useModelVisibility();
-  const { providerAuthStatus, refreshProviderAuthStatuses } = useProviderAuthStatus();
+  const providerAvailability = useProviderAvailability();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
 
@@ -126,18 +126,10 @@ export default function ProviderSelectionEmptyState({
     }
   }, []);
 
-  // Opening the picker rechecks availability after CLI login or configuration changes.
-  useEffect(() => {
-    if (dialogOpen) {
-      void refreshProviderAuthStatuses();
-    }
-  }, [dialogOpen, refreshProviderAuthStatuses]);
-
-  const availableProviders = useMemo(() => PROVIDER_META.filter(({ id }) => {
-    const status = providerAuthStatus[id];
-    return status.authenticated && status.installed !== false && !status.error && !status.loading;
-  }), [providerAuthStatus]);
-  const checkingAvailability = Object.values(providerAuthStatus).some((status) => status.loading);
+  const availableProviders = useMemo(() => PROVIDER_META.filter(({ id }) => (
+    providerAvailability[id] === true
+  )), [providerAvailability]);
+  const checkingAvailability = PROVIDER_META.some(({ id }) => providerAvailability[id] === undefined);
 
   /** Only usable providers with models become branches in the conversation picker. */
   const visibleProviderGroups = useMemo<ModelGroup[]>(

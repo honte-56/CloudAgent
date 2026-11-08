@@ -107,6 +107,7 @@ const createActions = (setCustomModelsOnly: ProviderModelActions['setCustomModel
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   resetUserPreferences();
   toggleRequests.length = 0;
   toggleFailures.length = 0;

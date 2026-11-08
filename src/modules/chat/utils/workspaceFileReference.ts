@@ -77,24 +77,6 @@ export function resetWorkspaceFileLookups(): void {
   answers.clear();
 }
 
-export type FilePreviewKind = 'image' | 'html' | 'pdf' | 'text' | null;
-
-const TEXT_PREVIEW_EXTENSIONS = new Set([
-  'md', 'txt', 'json', 'csv', 'tsv', 'log', 'py', 'js', 'ts', 'tsx', 'jsx', 'css', 'yaml', 'yml', 'xml', 'sh', 'sql',
-]);
-
-/** Largest text/HTML file the preview will load; larger ones are download-only. */
-export const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
-
-/** How a file can be previewed in the browser, or null when it can only be downloaded. */
-export function getFilePreviewKind(name: string): FilePreviewKind {
-  const extension = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return 'image';
-  if (extension === 'html' || extension === 'htm') return 'html';
-  if (extension === 'pdf') return 'pdf';
-  return TEXT_PREVIEW_EXTENSIONS.has(extension) ? 'text' : null;
-}
-
 /** "1.2 KB" style size for the file card. */
 export function formatFileBytes(size: number | undefined): string {
   if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return '';

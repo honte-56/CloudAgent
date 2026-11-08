@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, it, vi } from 'vitest';
 
+import { PaletteOpsProvider, usePaletteOpsRegister } from '@/modules/command-palette';
+import { Markdown } from '@/modules/chat/transcript/Markdown';
+import { MarkdownWorkspaceContext } from '@/modules/chat/context/MarkdownWorkspaceContext';
 import MarkdownFileCard from '@/modules/chat/transcript/MarkdownFileCard';
 import {
-  getFilePreviewKind,
   looksLikeFileReference,
   resetWorkspaceFileLookups,
 } from '@/modules/chat/utils/workspaceFileReference';
@@ -57,16 +59,6 @@ describe('looksLikeFileReference', () => {
   });
 });
 
-describe('getFilePreviewKind', () => {
-  it('maps extensions to a safe preview type', () => {
-    assert.equal(getFilePreviewKind('welcome.html'), 'html');
-    assert.equal(getFilePreviewKind('shot.PNG'), 'image');
-    assert.equal(getFilePreviewKind('doc.pdf'), 'pdf');
-    assert.equal(getFilePreviewKind('notes.md'), 'text');
-    assert.equal(getFilePreviewKind('archive.zip'), null);
-  });
-});
-
 describe('MarkdownFileCard', () => {
   beforeEach(() => {
     resetWorkspaceFileLookups();
@@ -114,7 +106,7 @@ describe('MarkdownFileCard', () => {
     assert.deepEqual(readFileBlob.mock.calls[0].slice(0, 2), ['p1', '/home/u/welcome.html']);
   });
 
-  it('offers no preview for a type the browser cannot show, and asks the server once per path', async () => {
+  it('offers the shared viewer for unsupported files, and asks the server once per path', async () => {
     statFiles.mockResolvedValue(json({
       files: [{ path: 'out/archive.zip', exists: true, name: 'archive.zip', size: 10 }],
     }));
@@ -125,26 +117,35 @@ describe('MarkdownFileCard', () => {
     render(<MarkdownFileCard projectId="p1" filePath="out/archive.zip" fallback={fallback} />);
     await waitFor(() => assert.ok(screen.getByText('archive.zip')));
 
-    assert.equal(screen.queryByRole('button', { name: /fileCard.preview/ }), null);
+    assert.ok(screen.getByRole('button', { name: /fileCard.preview/ }));
     assert.equal(statFiles.mock.calls.length, 1);
   });
 
-  it('previews an html file in a script-only sandbox', async () => {
-    statFiles.mockResolvedValue(json({
-      files: [{ path: '/home/u/welcome.html', exists: true, name: 'welcome.html', size: 11 }],
-    }));
-    readFileBlob.mockResolvedValue(new Response('<h1>hi</h1>', { status: 200 }));
+  it.each(['notes.md', 'welcome.html', 'shot.png', 'doc.pdf', 'archive.zip', 'clip.mp4', 'large.json'])(
+    'opens inline %s references through the workspace viewer without a local preview',
+    async (name) => {
+      const filePath = `/home/u/${name}`;
+      statFiles.mockResolvedValue(json({ files: [{ path: filePath, exists: true, name, size: 3 * 1024 * 1024 }] }));
+      const openFileInEditor = vi.fn();
+      const openFile = vi.fn();
+      function Transcript() {
+        usePaletteOpsRegister({ openFileInEditor, openFile });
+        return (
+          <MarkdownWorkspaceContext.Provider value={{ projectId: 'p1' }}>
+            <Markdown>{`文档已写好，放在 \`${filePath}\`。`}</Markdown>
+          </MarkdownWorkspaceContext.Provider>
+        );
+      }
 
-    render(<MarkdownFileCard projectId="p1" filePath="/home/u/welcome.html" fallback={fallback} />);
-    await waitFor(() => assert.ok(screen.getByText('welcome.html')));
-    fireEvent.click(screen.getByRole('button', { name: 'fileCard.preview:welcome.html' }));
-
-    const frame = await waitFor(() => {
-      const element = document.querySelector('iframe');
-      assert.ok(element);
-      return element;
-    });
-    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts');
-    assert.equal(frame.getAttribute('srcdoc'), '<h1>hi</h1>');
-  });
+      render(<PaletteOpsProvider><Transcript /></PaletteOpsProvider>);
+      fireEvent.click(await screen.findByRole('button', { name: `fileCard.preview:${name}` }));
+      assert.deepEqual(openFileInEditor.mock.calls, [[filePath, undefined]]);
+      fireEvent.click(screen.getByRole('button', { name }));
+      assert.equal(openFileInEditor.mock.calls.length, 2);
+      assert.equal(openFile.mock.calls.length, 0);
+      assert.equal(readFileBlob.mock.calls.length, 0);
+      assert.equal(screen.queryByRole('dialog'), null);
+      assert.equal(document.querySelector('iframe, pre'), null);
+    },
+  );
 });

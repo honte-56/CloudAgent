@@ -13,6 +13,8 @@ beforeEach(async () => {
   localStorage.clear();
   resetUserPreferences();
   await i18n.changeLanguage('en');
+  // Language selection schedules a preference write; discard it before configuring model-save responses.
+  resetUserPreferences();
   mocks.save.mockReset().mockResolvedValue({ ok: true });
   mocks.models.mockReset().mockResolvedValue({
     ok: true,

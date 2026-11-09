@@ -1467,6 +1467,8 @@ export type FileTreeServiceDependencies = {
   fileSystem: FileTreeFileSystem;
   projects: FileTreeProjectGateway;
   workspace: FileTreeWorkspaceGateway;
+  /** Absolute temporary roots permitting edits to existing files, checked after resolving symlinks. */
+  temporaryFileRoots: string[];
   resolveMimeType(filePath: string): string;
   fileSystemConcurrency: number;
   logger: FileTreeLogger;

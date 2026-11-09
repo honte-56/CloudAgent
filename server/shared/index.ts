@@ -18,3 +18,18 @@ export type { CodexServerRequestHandler, ProviderPermissionDecision, NativeQueue
 
 // GitHub auth and Providers share the non-secret runtime instruction envelope.
 export { LEGACY_GITHUB_AUTH_INSTRUCTIONS, prependRuntimeInstructions } from './utils.js';
+
+// File Tree composition, services and tests share filesystem and path-policy contracts.
+export type {
+  FileTreeDirectoryEntry,
+  FileTreeFileSystem,
+  FileTreeLogger,
+  FileTreeNode,
+  FileTreeProjectGateway,
+  FileTreeServiceDependencies,
+  FileTreeServices,
+  FileTreeStats,
+  FileTreeUploadedFile,
+  FileTreeWorkspaceGateway,
+} from './types.js';
+export { FORBIDDEN_WORKSPACE_PATHS, WORKSPACES_ROOT, resolvePathUnderRoots, resolveReadOnlyRootPath } from './utils.js';

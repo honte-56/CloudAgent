@@ -14,8 +14,8 @@ import type {
   FileTreeServiceDependencies,
   FileTreeServices,
   FileTreeStats,
-} from '@/shared/types.js';
-import { AppError, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/utils.js';
+} from '@/shared/index.js';
+import { AppError, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/index.js';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,6 +89,7 @@ function createDependencies(
       validatePath: async (candidatePath) => ({ valid: true, resolvedPath: candidatePath }),
       resolveReadOnlyRootPath: async () => null,
     },
+    temporaryFileRoots: [],
     resolveMimeType: () => 'text/plain',
     fileSystemConcurrency: 4,
     logger: { error: () => undefined },
@@ -400,7 +401,7 @@ test('createEntry performs filesystem mutation only through the injected adapter
 
 /**
  * Builds the service against the real filesystem and the real workspace policy,
- * which is the only way to exercise the read-only roots: the whole guarantee
+ * which is the only way to exercise external roots: the whole guarantee
  * rests on `realpath` resolving symlinks before the comparison.
  */
 function createRealFileSystemService(projectRoot: string, workspaceRoot = projectRoot): FileTreeServices {
@@ -432,13 +433,14 @@ function createRealFileSystemService(projectRoot: string, workspaceRoot = projec
       validatePath: (candidatePath) => validateWorkspacePath(candidatePath),
       resolveReadOnlyRootPath: (candidatePath) => resolveReadOnlyRootPath(candidatePath),
     },
+    temporaryFileRoots: [...new Set(['/tmp', os.tmpdir()])],
     resolveMimeType: () => 'text/plain',
     fileSystemConcurrency: 4,
     logger: { error: () => undefined },
   });
 }
 
-test('the temp directory can be browsed and read, but never written to', async () => {
+test('existing temporary files can be edited without granting other file-management operations', async () => {
   const temporaryDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-tmp-'));
   const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
 
@@ -460,11 +462,12 @@ test('the temp directory can be browsed and read, but never written to', async (
     const streamed = await service.openFile('project-1', outputPath);
     streamed.stream.destroy();
 
-    // Read-only means read-only: nothing may be created or changed there.
-    await assert.rejects(
-      service.saveTextFile('project-1', outputPath, 'overwritten'),
-      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
-    );
+    const saved = await service.saveTextFile('project-1', outputPath, 'updated report');
+    assert.equal(saved.success, true);
+    assert.equal(saved.path, await fsPromises.realpath(outputPath));
+    assert.equal((await service.readTextFile('project-1', outputPath)).content, 'updated report');
+
+    // Editing an existing file does not grant creation, renaming or deletion.
     await assert.rejects(
       service.createWorkspaceFolder(path.join(temporaryDirectory, 'new-folder')),
       (error: unknown) => (error as AppError).code === 'INVALID_WORKSPACE_PATH',
@@ -499,14 +502,63 @@ test('the temp directory can be browsed and read, but never written to', async (
       (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
     );
     assert.deepEqual(await fsPromises.readdir(path.join(temporaryDirectory, 'tasks')), ['agent.output']);
-    assert.equal(await fsPromises.readFile(outputPath, 'utf8'), 'what the agent found');
+    assert.equal(await fsPromises.readFile(outputPath, 'utf8'), 'updated report');
   } finally {
     await fsPromises.rm(temporaryDirectory, { recursive: true, force: true });
     await fsPromises.rm(projectRoot, { recursive: true, force: true });
   }
 });
 
-test('reading through a symlink out of the temp directory is still refused', async () => {
+test('temporary edits support internal symlinks but reject directories, new files and relative traversal', async () => {
+  const temporaryDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-edit-'));
+  const projectRoot = path.join(temporaryDirectory, 'project');
+  const reportPath = path.join(temporaryDirectory, 'report.md');
+  const linkedPath = path.join(temporaryDirectory, 'linked.md');
+
+  try {
+    await fsPromises.mkdir(projectRoot);
+    await fsPromises.writeFile(reportPath, 'original', 'utf8');
+    await fsPromises.symlink(reportPath, linkedPath);
+    const service = createRealFileSystemService(projectRoot);
+
+    await service.saveTextFile('project-1', linkedPath, 'edited via link');
+    assert.equal(await fsPromises.readFile(reportPath, 'utf8'), 'edited via link');
+    assert.equal((await fsPromises.lstat(linkedPath)).isSymbolicLink(), true);
+
+    for (const filePath of ['../report.md', path.join(temporaryDirectory, 'missing.md')]) {
+      await assert.rejects(
+        service.saveTextFile('project-1', filePath, 'unexpected'),
+        (error: unknown) => error instanceof AppError && error.statusCode === 403,
+      );
+    }
+    for (const filePath of [temporaryDirectory, os.tmpdir()]) {
+      await assert.rejects(
+        service.saveTextFile('project-1', filePath, 'unexpected'),
+        (error: unknown) => error instanceof AppError && error.statusCode === 400,
+      );
+    }
+    assert.equal(await fsPromises.readFile(reportPath, 'utf8'), 'edited via link');
+    await assert.rejects(fsPromises.access(path.join(temporaryDirectory, 'missing.md')));
+  } finally {
+    await fsPromises.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('project saves still accept relative paths, absolute paths and empty content', async () => {
+  const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-edit-'));
+  try {
+    const service = createRealFileSystemService(projectRoot);
+    const reportPath = path.join(projectRoot, 'report.md');
+    await service.saveTextFile('project-1', 'report.md', 'new project file');
+    assert.equal(await fsPromises.readFile(reportPath, 'utf8'), 'new project file');
+    await service.saveTextFile('project-1', reportPath, '');
+    assert.equal(await fsPromises.readFile(reportPath, 'utf8'), '');
+  } finally {
+    await fsPromises.rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('reading and saving through a symlink out of the temp directory are refused', async () => {
   const temporaryDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-tmp-'));
   const projectRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'file-tree-project-'));
   // The link target has to sit under no read-only root. Beside this file is
@@ -529,6 +581,11 @@ test('reading through a symlink out of the temp directory is still refused', asy
       service.readTextFile('project-1', path.join(temporaryDirectory, 'escape', 'secret.txt')),
       (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
     );
+    await assert.rejects(
+      service.saveTextFile('project-1', path.join(temporaryDirectory, 'escape', 'secret.txt'), 'overwritten'),
+      (error: unknown) => (error as AppError).code === 'PATH_OUTSIDE_PROJECT',
+    );
+    assert.equal(await fsPromises.readFile(path.join(outsideDirectory, 'secret.txt'), 'utf8'), 'secret');
   } finally {
     if (previousWorkspacesRoot === undefined) {
       delete process.env.WORKSPACES_ROOT;

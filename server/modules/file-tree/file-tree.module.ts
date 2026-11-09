@@ -13,8 +13,8 @@ import type {
   FileTreeLogger,
   FileTreeProjectGateway,
   FileTreeWorkspaceGateway,
-} from '@/shared/types.js';
-import { WORKSPACES_ROOT, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/utils.js';
+} from '@/shared/index.js';
+import { WORKSPACES_ROOT, resolveReadOnlyRootPath, validateWorkspacePath } from '@/shared/index.js';
 
 const MAXIMUM_UPLOAD_SIZE_MEGABYTES = 200;
 const MAXIMUM_UPLOAD_SIZE_BYTES = MAXIMUM_UPLOAD_SIZE_MEGABYTES * 1024 * 1024;
@@ -84,6 +84,7 @@ const fileTreeServices = createFileTreeService({
   fileSystem: fileTreeFileSystem,
   projects: fileTreeProjects,
   workspace: fileTreeWorkspace,
+  temporaryFileRoots: [...new Set(['/tmp', os.tmpdir()])],
   resolveMimeType: (filePath) => mime.lookup(filePath) || 'application/octet-stream',
   fileSystemConcurrency: readFileSystemConcurrency(),
   logger: fileTreeLogger,

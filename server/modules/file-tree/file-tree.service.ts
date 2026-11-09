@@ -8,13 +8,13 @@ import type {
   FileTreeServiceDependencies,
   FileTreeServices,
   FileTreeUploadedFile,
-} from '@/shared/types.js';
+} from '@/shared/index.js';
 import {
   AppError,
   FORBIDDEN_WORKSPACE_PATHS,
   normalizeProjectPath,
   resolvePathUnderRoots,
-} from '@/shared/utils.js';
+} from '@/shared/index.js';
 
 const HARD_EXCLUDED_DIRECTORY_NAMES = new Set([
   'node_modules', '.git', '.svn', '.hg',
@@ -324,10 +324,9 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
    * Resolves a directory the browser may list.
    *
    * The read-only roots (the system temp directory and the Claude projects
-   * directory, see `READ_ONLY_ROOTS` in shared/utils) are browsable but never
-   * writable, so they are checked before the workspace policy rejects them.
-   * `createWorkspaceFolder` deliberately does not do this, which is what keeps
-   * them read-only.
+   * directory, see `READ_ONLY_ROOTS` in shared/utils) are checked before the
+   * workspace policy rejects them. Browsing does not grant file-management
+   * access; saving existing temporary files has its own policy below.
    */
   async function resolveBrowsablePath(targetPath: string): Promise<string> {
     const readOnlyPath = await dependencies.workspace.resolveReadOnlyRootPath(targetPath);
@@ -354,9 +353,9 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
    *
    * The agent may also point at a file in another folder of the workspace, the
    * same tree `browseWorkspace` lists, so anything under the workspace root is
-   * readable too. Symlinks are resolved before that comparison. The writing
-   * endpoints keep using `resolvePathInsideProject` alone, so nothing outside
-   * the project can be changed.
+   * readable too. Symlinks are resolved before that comparison. Reading does
+   * not grant write access; saving existing temporary files is a separate
+   * exception to the project-only mutation policy.
    */
   async function resolveReadablePath(projectRoot: string, targetPath: string): Promise<string> {
     if (path.isAbsolute(targetPath)) {
@@ -372,6 +371,23 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
     }
 
     return resolvePathInsideProject(projectRoot, targetPath);
+  }
+
+  async function resolveEditablePath(projectRoot: string, targetPath: string): Promise<string> {
+    try {
+      return resolvePathInsideProject(projectRoot, targetPath);
+    } catch (error) {
+      // Only explicit absolute references may edit an existing temporary file.
+      // Resolve symlinks before checking roots so a temp link cannot overwrite
+      // a transcript or another file outside the temporary directories.
+      if (path.isAbsolute(targetPath)) {
+        const temporaryPath = await resolvePathUnderRoots(targetPath, dependencies.temporaryFileRoots);
+        if (temporaryPath) {
+          return temporaryPath;
+        }
+      }
+      throw error;
+    }
   }
 
   async function cleanupTemporaryFiles(files: FileTreeUploadedFile[]): Promise<void> {
@@ -520,13 +536,22 @@ export function createFileTreeService(dependencies: FileTreeServiceDependencies)
 
     async saveTextFile(projectId, filePath, content) {
       const projectRoot = await resolveProjectRoot(projectId);
-      const resolvedPath = resolvePathInsideProject(projectRoot, filePath);
+      const resolvedPath = await resolveEditablePath(projectRoot, filePath);
       try {
+        // Temp roots must never be passed to writeFile as directories.
+        // Project saves retain their ability to create a new file.
+        if (path.isAbsolute(filePath) && !resolvedPath.startsWith(path.resolve(projectRoot) + path.sep)) {
+          const stats = await fileSystem.stat(resolvedPath);
+          if (stats.isDirectory()) {
+            throw createFileTreeError('Path is a directory, not a file', 400, 'EISDIR');
+          }
+        }
         await fileSystem.writeTextFile(resolvedPath, content);
       } catch (error) {
         mapFileSystemError(error, {
           ENOENT: { message: 'File or directory not found', statusCode: 404 },
           EACCES: { message: 'Permission denied', statusCode: 403 },
+          EISDIR: { message: 'Path is a directory, not a file', statusCode: 400 },
         });
       }
 

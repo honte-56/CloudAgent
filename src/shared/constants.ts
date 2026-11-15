@@ -225,3 +225,10 @@ export const PROVIDER_PERMISSION_PREFERENCE_KEYS: Record<LLMProvider, UserPrefer
   codex: 'codexPermissions',
   opencode: 'opencodePermissions',
 };
+
+// ---------------------------
+
+//----------------- CHAT HISTORY PAGINATION ------------
+
+/** Bounds automatic history reads and the number of older messages revealed at once. */
+export const SESSION_MESSAGES_PAGE_SIZE = 20;

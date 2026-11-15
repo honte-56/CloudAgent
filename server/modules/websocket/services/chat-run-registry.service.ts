@@ -31,6 +31,14 @@ type ChatRun = {
   /** Agent API reads the terminal outcome without retaining the full event journal. */
   aborted: boolean;
   lastSeq: number;
+  /**
+   * Journal cursor when the run's current turn began: at start, and again
+   * each time live input re-opens a run that was held for background work.
+   * A client that subscribes with no cursor of its own replays from here, so
+   * it hears the turn in progress and nothing the persisted transcript
+   * already holds.
+   */
+  turnStartSeq: number;
   streams: Map<string, NormalizedMessage>;
   writer: ChatSessionWriter;
   startedAt: number;
@@ -110,6 +118,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     run.status = 'running';
     run.aborted = false;
     run.completedAt = null;
+    run.turnStartSeq = run.lastSeq;
   }
 
   if (runs.get(run.appSessionId) !== run) return null;
@@ -225,6 +234,7 @@ export const chatRunRegistry = {
       status: 'running',
       aborted: false,
       lastSeq: chatEventsDb.cursor(input.appSessionId),
+      turnStartSeq: chatEventsDb.cursor(input.appSessionId),
       streams: new Map(),
       writer: null as unknown as ChatSessionWriter,
       startedAt: Date.now(),
@@ -248,6 +258,17 @@ export const chatRunRegistry = {
 
   /** Authoritative delivery cursor survives run completion, eviction and process restart. */
   getCursor(appSessionId: string): number { return chatEventsDb.cursor(appSessionId); },
+
+  /**
+   * Where a subscriber with no cursor of its own starts replaying: the start
+   * of the current turn while a run is registered, else the cursor itself
+   * (nothing). Everything older is in the persisted transcript the client
+   * loads over REST, and replaying it only ever produced rows the client had
+   * to guess a place for.
+   */
+  getReplayStartSeq(appSessionId: string): number {
+    return runs.get(appSessionId)?.turnStartSeq ?? chatEventsDb.cursor(appSessionId);
+  },
 
   getRun(appSessionId: string): ChatRun | undefined {
     return runs.get(appSessionId);

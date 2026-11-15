@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
+import type { TestContext } from 'node:test';
 
 import { Codex } from '@openai/codex-sdk';
 import type { Thread, ThreadOptions } from '@openai/codex-sdk';
@@ -8,9 +9,21 @@ import type { Thread, ThreadOptions } from '@openai/codex-sdk';
 import { codexRuntime } from '@/modules/providers/list/codex/codex-runtime.provider.js';
 import type { ProviderRuntimeContext } from '@/shared/index.js';
 
+function selectSdkRuntime(t: TestContext): void {
+  // These tests mock SDK threads. A host running the app-server transport
+  // must not redirect them into a real CLI process instead of that mock.
+  const previous = process.env.CLOUDCLI_CODEX_RUNTIME;
+  process.env.CLOUDCLI_CODEX_RUNTIME = 'sdk';
+  t.after(() => {
+    if (previous === undefined) delete process.env.CLOUDCLI_CODEX_RUNTIME;
+    else process.env.CLOUDCLI_CODEX_RUNTIME = previous;
+  });
+}
+
 for (const resumed of [false, true]) {
   for (const permissionMode of [undefined, 'default', 'unknown', 'acceptEdits', 'bypassPermissions']) {
     test(`Codex ${resumed ? 'resumes' : 'starts'} with supported permissions (${permissionMode ?? 'omitted'})`, async (t) => {
+      selectSdkRuntime(t);
       let capturedOptions: ThreadOptions | undefined;
       let capturedPrompt: unknown;
       const messages: unknown[] = [];
@@ -60,6 +73,7 @@ for (const resumed of [false, true]) {
 
 for (const command of ['', '  \n\t']) {
   test(`Codex supplies a prompt for an image-only turn (${JSON.stringify(command)})`, async (t) => {
+    selectSdkRuntime(t);
     let capturedPrompt: unknown;
     const imagePath = path.join(process.cwd(), 'public', 'favicon.png');
     const thread = {

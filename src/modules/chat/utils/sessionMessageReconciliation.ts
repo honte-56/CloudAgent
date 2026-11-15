@@ -1,9 +1,16 @@
 import { stripRuntimeInstructions } from '@/shared/utils';
 import type { NormalizedMessage } from '@/shared/types';
 
-const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
-const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 10_000;
-const LOCAL_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS = 30_000;
+/**
+ * How long after a live user row its persisted copy may land. Long, because a
+ * message typed while the CLI is busy is only written to the transcript when
+ * the CLI gets to it, which for a long tool run can be well into the turn.
+ * Matching stays one-to-one and closest-in-time, so a repeated short reply
+ * inside the window still retires exactly one row per echo.
+ */
+const LIVE_USER_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
+const LIVE_USER_DEDUPE_CLOCK_SKEW_MS = 10_000;
+const LIVE_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS = 30_000;
 
 type UserTurnFingerprint = {
   text: string;
@@ -59,8 +66,8 @@ function findServerEchoForLocalUser(
   const firstEligibleIndex = localMessage.replacesAfterRowCount ?? 0;
 
   const dedupeWindow = localFingerprint.text
-    ? LOCAL_USER_DEDUPE_WINDOW_MS
-    : LOCAL_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS;
+    ? LIVE_USER_DEDUPE_WINDOW_MS
+    : LIVE_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS;
   let closestMatch: NormalizedMessage | null = null;
   let closestTimeDifference = Number.POSITIVE_INFINITY;
 
@@ -78,7 +85,7 @@ function findServerEchoForLocalUser(
     const serverTime = readMessageTime(serverMessage);
     if (
       serverTime === null
-      || serverTime < localTime - LOCAL_USER_DEDUPE_CLOCK_SKEW_MS
+      || serverTime < localTime - LIVE_USER_DEDUPE_CLOCK_SKEW_MS
       || serverTime - localTime > dedupeWindow
     ) {
       continue;
@@ -95,26 +102,36 @@ function findServerEchoForLocalUser(
 }
 
 /**
- * Removes local optimistic user rows once a corresponding persisted turn is
- * available. Matches are one-to-one so repeated sends cannot claim one row.
+ * Matches live user rows to their persisted copies for the chat session store.
+ * Retaining the correspondence lets the store anchor following replies to the
+ * persisted prompt before it retires the live echo.
+ *
+ * Every user row that reaches the store live is an echo of something the
+ * transcript will hold under its own row id: the composer's optimistic copy
+ * (`local_…`), and the copy a provider sends back when it accepts a message
+ * typed mid-run. Neither shares an id with the persisted row, so the match is
+ * by text and attachment counts within a time window. Matches are one-to-one
+ * so repeated sends cannot claim one row.
  */
-export function removeOptimisticUserEchoes(
+export function matchPersistedUserEchoes(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
-): NormalizedMessage[] {
+): Map<NormalizedMessage, NormalizedMessage> {
   const claimedServerIds = new Set<string>();
+  const matches = new Map<NormalizedMessage, NormalizedMessage>();
 
-  return realtimeMessages.filter((message) => {
-    if (!message.id.startsWith('local_')) {
-      return true;
+  for (const message of realtimeMessages) {
+    if (message.kind !== 'text' || message.role !== 'user') {
+      continue;
     }
 
     const serverEcho = findServerEchoForLocalUser(message, serverMessages, claimedServerIds);
     if (!serverEcho) {
-      return true;
+      continue;
     }
 
     claimedServerIds.add(serverEcho.id);
-    return false;
-  });
+    matches.set(message, serverEcho);
+  }
+  return matches;
 }

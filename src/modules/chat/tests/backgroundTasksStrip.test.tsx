@@ -5,7 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import '@/modules/i18n';
 import { BackgroundTasksStrip } from '@/modules/chat/transcript/BackgroundTasksStrip';
 import { visibleCountToReveal } from '@/modules/chat/hooks/useChatSessionState';
-import { SESSION_MESSAGES_PAGE_SIZE } from '@/modules/chat/utils/sessionMessagePagination';
+import { SESSION_MESSAGES_PAGE_SIZE } from '@/shared/constants';
 import type { ChatMessage } from '@/shared/types';
 
 const toolRow = (overrides: Partial<ChatMessage>): ChatMessage => ({

@@ -403,3 +403,30 @@ test('an edit retires obsolete replay frames without resetting delivery sequence
   assert.deepEqual(events.map(e=>e.seq),[2,3]);assert(!events.some(e=>e.id==='obsolete'));
  });
 });
+
+test('a subscriber with no cursor replays from the current turn, not from the start of the journal', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('turn-start', 'claude', '/workspace/demo');
+    const connection = new FakeConnection();
+    const first = chatRunRegistry.startRun({ appSessionId: 'turn-start', provider: 'claude', providerSessionId: null, connection, userId: null });
+    assert.ok(first);
+    first.writer.send({ kind: 'text', role: 'assistant', provider: 'claude', sessionId: 'x', content: 'first turn' });
+    first.writer.sendComplete({ exitCode: 0 });
+    // The first run's events are journaled (seq 1-2) and stay replayable for a while.
+    assert.equal(chatRunRegistry.getReplayStartSeq('turn-start'), 0);
+
+    // Live input re-opens the held run: its next turn starts at the cursor as it stands.
+    first.writer.send({ kind: 'status', provider: 'claude', text: 'Processing…', status: 'live_input' });
+    assert.equal(chatRunRegistry.getReplayStartSeq('turn-start'), 2);
+    first.writer.send({ kind: 'text', role: 'assistant', provider: 'claude', sessionId: 'x', content: 'second turn' });
+    assert.deepEqual(
+      chatRunRegistry.replayEvents('turn-start', chatRunRegistry.getReplayStartSeq('turn-start'))
+        .filter((event) => event.kind === 'text').map((event) => event.content),
+      ['second turn'],
+    );
+
+    // With no run registered at all, nothing is older than the persisted transcript.
+    chatRunRegistry.clearAll();
+    assert.equal(chatRunRegistry.getReplayStartSeq('turn-start'), chatRunRegistry.getCursor('turn-start'));
+  });
+});

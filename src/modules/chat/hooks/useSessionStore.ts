@@ -1,50 +1,60 @@
 /**
  * Session-keyed message store.
  *
- * Holds per-session state in a Map keyed by sessionId.
- * Session switch = change activeSessionId pointer. No clearing. Old data stays.
- * WebSocket handler = store.appendRealtime(msg.sessionId, msg). One line.
- * No localStorage for messages. Backend JSONL is the source of truth.
+ * One slot per session id. The persisted transcript served by the sessions
+ * API is the source of truth for what the conversation looks like; live
+ * websocket rows exist only to show work the transcript has not caught up
+ * with yet. The two are kept apart and combined by one rule:
+ *
+ *   merged = persisted rows, in server order
+ *          + live rows that are not persisted yet, each placed right after the
+ *            persisted row that was newest when it arrived
+ *
+ * Stable identities and persisted neighbours determine placement. Providers
+ * without shared identities use echo matching; orphaned replay rows
+ * use their timestamp only until a persisted neighbour is available.
+ * Session switch = change the active pointer; nothing is cleared.
+ * No localStorage for messages.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/shared/api';
 import { stripRuntimeInstructions } from '@/shared/utils';
-import type { LLMProvider, NormalizedMessage } from '@/shared/types';
-import { removeOptimisticUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
+import type { NormalizedMessage, SessionMessagesRequestOptions } from '@/shared/types';
+import { SESSION_MESSAGES_PAGE_SIZE } from '@/shared/constants';
+import { matchPersistedUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
 import {
-  hasReachedCachedTailTimeBoundary,
   mergeLatestServerPage,
   mergeOlderServerPage,
-  planLatestPageBridge,
-  resolveLatestPagePagination,
-  SESSION_MESSAGES_PAGE_SIZE,
 } from '@/modules/chat/utils/sessionMessagePagination';
-import type { SessionMessagesRequestOptions } from '@/modules/chat/utils/sessionMessagePagination';
-
-// ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
-
 
 // ─── Per-session slot ────────────────────────────────────────────────────────
 
-export type SessionStatus = 'idle' | 'loading' | 'streaming' | 'error';
+type SessionStatus = 'idle' | 'loading' | 'streaming' | 'error';
 
-export type SessionSlot = {
+/**
+ * Where a live row sits among persisted rows, by persisted identity. `after`
+ * is the persisted row that was newest when the live row arrived; `before` is
+ * used instead when a row arrived with no persisted history loaded yet and a
+ * later live row has since been persisted.
+ */
+type LiveAnchor = { after?: string; before?: string };
+
+type SessionSlot = {
   serverMessages: NormalizedMessage[];
   realtimeMessages: NormalizedMessage[];
   merged: NormalizedMessage[];
-  /** @internal Cache-invalidation refs for computeMerged */
+  /** @internal Cache-invalidation refs for recomputeMergedIfNeeded */
   _lastServerRef: NormalizedMessage[];
   _lastRealtimeRef: NormalizedMessage[];
-  _lastHasMore: boolean;
   /**
    * @internal Serializes history reads for this session so an older-page
-   * request calculates its offset after any latest-page refresh completes.
+   * request calculates its cursor after any latest-page refresh completes.
    */
   _historyMutationQueue: Promise<void>;
-  /** Retain ordering anchors when persisted rows replace their live copies. */
-  _deliveryPositions: Map<string, number>;
+  /** @internal Placement of each live row, keyed by the row's identity. */
+  _liveAnchors: Map<string, LiveAnchor>;
   status: SessionStatus;
   fetchedAt: number;
   /** Last live update, allowing the visible pane to avoid redundant file polling while streaming. */
@@ -54,12 +64,18 @@ export type SessionSlot = {
   offset: number;
   /** Stable oldest loaded identity used by the history cursor API. */
   oldestCursor?: string;
+  /** Journal revision of the last page; a higher one means the transcript was cut and live rows before it are stale. */
   timelineRevision?: number;
   tokenUsage: unknown;
 };
 
 const EMPTY: NormalizedMessage[] = [];
 const SESSION_HISTORY_REQUEST_TIMEOUT_MS = 30_000;
+/** Upper bound on live rows per session; beyond it the oldest unpersisted rows go. */
+const MAX_REALTIME_MESSAGES = 500;
+/** How many older pages a latest-page refresh walks back to reconnect with the cached tail before giving up and replacing it. */
+const MAX_REFRESH_BRIDGE_PAGES = 3;
+const STALE_THRESHOLD_MS = 30_000;
 
 function createEmptySlot(): SessionSlot {
   return {
@@ -68,23 +84,44 @@ function createEmptySlot(): SessionSlot {
     merged: EMPTY,
     _lastServerRef: EMPTY,
     _lastRealtimeRef: EMPTY,
-    _lastHasMore: false,
+    _historyMutationQueue: Promise.resolve(),
+    _liveAnchors: new Map(),
     status: 'idle',
     fetchedAt: 0,
     total: 0,
     hasMore: false,
     offset: 0,
     // `undefined` means "no page has reported usage for this session yet", and
-    // every consumer distinguishes that from a reported `null`. Initialising it
-    // to `null` made the two indistinguishable, so a provider whose history
-    // payload carries no usage looked like one reporting zero — and every
-    // history refresh overwrote the value fetched from the token-usage
-    // endpoint with it.
+    // every consumer distinguishes that from a reported `null`.
     tokenUsage: undefined,
-    _historyMutationQueue: Promise.resolve(),
-    _deliveryPositions: new Map(),
   };
 }
+
+// ─── Identity ────────────────────────────────────────────────────────────────
+
+/**
+ * The one key a row is known by on both sides of the wire: the provider's
+ * stable item identity when it has one, the tool call id for tool rows (a
+ * live result row and the persisted call it belongs to share it), else the id.
+ */
+function timelineIdentity(row: NormalizedMessage): string {
+  return row.messageKey || (row.toolId ? `${row.kind}:${row.toolId}` : row.id);
+}
+
+/** Older Codex builds journaled lifecycle signals as tool rows; they are not transcript content. */
+function isLegacyControlSignal(row: NormalizedMessage): boolean {
+  return row.provider === 'codex' && row.kind === 'tool_use' && (['subAgentActivity', 'SubAgentActivity'].includes(row.toolName || '')
+    || row.toolName === 'TodoWrite' && (row.toolId || row.id).endsWith('-plan'));
+}
+
+// Only provider-owned rows carry injected context. Local composer text must
+// remain byte-for-byte intact, including a user quoting the instruction text.
+function cleanProviderUserMessage(row: NormalizedMessage): NormalizedMessage {
+  if (row.kind !== 'text' || row.role !== 'user' || row.id.startsWith('local_') || row.runtimeContextStripped || typeof row.content !== 'string') return row;
+  return { ...row, content: stripRuntimeInstructions(row.content), runtimeContextStripped: true };
+}
+
+// ─── History transport ───────────────────────────────────────────────────────
 
 type SessionHistoryPage = {
   oldestCursor?: string;
@@ -95,23 +132,10 @@ type SessionHistoryPage = {
   tokenUsage?: unknown;
 };
 
-function enqueueHistoryMutation<T>(
-  slot: SessionSlot,
-  operation: () => Promise<T>,
-): Promise<T> {
+function enqueueHistoryMutation<T>(slot: SessionSlot, operation: () => Promise<T>): Promise<T> {
   const result = slot._historyMutationQueue.then(operation);
-  slot._historyMutationQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
+  slot._historyMutationQueue = result.then(() => undefined, () => undefined);
   return result;
-}
-
-// Only provider-owned rows carry injected context. Local composer text must
-// remain byte-for-byte intact, including a user quoting the instruction text.
-function cleanProviderUserMessage(row: NormalizedMessage): NormalizedMessage {
-  if (row.kind !== 'text' || row.role !== 'user' || row.id.startsWith('local_') || row.runtimeContextStripped || typeof row.content !== 'string') return row;
-  return { ...row, content: stripRuntimeInstructions(row.content), runtimeContextStripped: true };
 }
 
 async function requestSessionHistoryPage(
@@ -133,356 +157,199 @@ async function requestSessionHistoryPage(
     timelineRevision: data.timelineRevision,
     total: typeof data.total === 'number' ? data.total : messages.length,
     hasMore: Boolean(data.hasMore),
-    ...(
-      data && typeof data === 'object' && 'tokenUsage' in data
-        ? { tokenUsage: data.tokenUsage }
-        : {}
-    ),
+    ...(data && typeof data === 'object' && 'tokenUsage' in data ? { tokenUsage: data.tokenUsage } : {}),
   };
 }
 
-/**
- * Compute merged messages: server + realtime, deduped by id and adjacent
- * assistant echo (same trimmed text), so finalized stream rows do not stack
- * on top of the persisted copy before realtime is cleared.
- */
-function readMessageTime(m: NormalizedMessage): number | null {
-  const time = Date.parse(m.timestamp);
-  return Number.isFinite(time) ? time : null;
-}
-
-function compareMessagesChronologically(a: NormalizedMessage, b: NormalizedMessage): number {
-  const timeA = readMessageTime(a) ?? 0;
-  const timeB = readMessageTime(b) ?? 0;
-  if (timeA !== timeB) {
-    return timeA - timeB;
-  }
-  return 0;
-}
+// ─── Reconciling live rows with a persisted page ─────────────────────────────
 
 /**
- * The time a row sorts by, which is its own except for one case.
+ * Retires the live copy of a reply that streamed without a provider identity.
  *
- * The optimistic echo of an edited message is the row whose clock cannot be
- * trusted against the rows around it. Providers that rewind by branching —
- * Codex has no way to resume a transcript partway, so an edit copies the kept
- * history into a new one — write the copy with the timestamps of the copy. So
- * every turn that survived the cut comes back from the next refresh stamped a
- * moment *after* the replacement was typed, and the message the user just sent
- * jumps to the top of the conversation.
+ * Cursor and OpenCode stream text under a key this client made up, so the
+ * persisted reply can only be recognised by its words. Matching is one-to-one
+ * against persisted assistant text so two identical replies stay two rows.
+ */
+function matchKeylessAssistantEchoes(server: NormalizedMessage[], live: NormalizedMessage[]): Map<NormalizedMessage, NormalizedMessage> {
+  const claimed = new Set<number>();
+  const matches = new Map<NormalizedMessage, NormalizedMessage>();
+  for (const row of live) {
+    const keyless = !row.messageKey || row.messageKey.startsWith('legacy:');
+    if (!keyless || row.role !== 'assistant' || row.kind !== 'text' || !row.content?.trim()) continue;
+    const text = row.content.trim();
+    const index = server.findIndex((candidate, position) => !claimed.has(position)
+      && candidate.kind === 'text' && candidate.role === 'assistant' && (candidate.content || '').trim() === text);
+    if (index < 0) continue;
+    claimed.add(index);
+    matches.set(row, server[index]);
+  }
+  return matches;
+}
+
+/** True when a live text row is further along than the persisted copy of the same item. */
+function liveTextIsAhead(live: NormalizedMessage, persisted: NormalizedMessage): boolean {
+  const isText = live.kind === 'stream_delta' || (live.kind === 'text' && live.role === 'assistant');
+  return isText && (live.content?.length ?? 0) > (persisted.content?.length ?? 0);
+}
+
+/**
+ * Drops every live row the persisted page now owns and re-anchors the rest.
  *
- * A replacement is by definition the newest thing in the conversation, so it
- * is sorted as such instead of by what the clock said when it was typed.
+ * Live rows are kept in delivery order, so the persisted rows among them say
+ * where the unpersisted ones belong: right after the nearest persisted row
+ * delivered before them, or — for rows that arrived before anything persisted
+ * had been delivered — right before the nearest persisted row delivered after
+ * them. Only a row with no persisted neighbour at all keeps the anchor it was
+ * given on arrival. This is what keeps a replayed turn that is longer than the
+ * loaded page above that page instead of under it.
  */
-
-/**
- * Count how many user turns precede `message` in a chronologically merged view
- * of server + realtime rows. Used to match a realtime row to the correct turn
- * on disk when several turns share identical assistant text.
- */
-function getUserTurnOrdinalBefore(
-  message: NormalizedMessage,
-  serverMessages: NormalizedMessage[],
-  realtimeMessages: NormalizedMessage[],
-): number {
-  const messageTime = readMessageTime(message);
-  let userCount = 0;
-
-  for (const candidate of [...serverMessages, ...realtimeMessages].sort(compareMessagesChronologically)) {
-    if (candidate.id === message.id) {
-      break;
-    }
-
-    const candidateTime = readMessageTime(candidate);
-    if (
-      messageTime !== null
-      && candidateTime !== null
-      && candidateTime > messageTime
-    ) {
-      break;
-    }
-
-    if (candidate.kind === 'text' && candidate.role === 'user') {
-      userCount++;
+function reconcileLiveWithServer(slot: SessionSlot): void {
+  const server = slot.serverMessages;
+  const anchors = slot._liveAnchors;
+  const persistedByIdentity = new Map(server.map((row) => [timelineIdentity(row), row]));
+  // A tool result is drawn inside its call: once the persisted call carries
+  // the result, the live result row has nothing left to say.
+  const callIdentityByResultToolId = new Map<string, string>();
+  for (const row of server) {
+    if (row.kind === 'tool_use' && row.toolId && row.toolResult) {
+      callIdentityByResultToolId.set(row.toolId, timelineIdentity(row));
     }
   }
 
-  return Math.max(0, userCount - 1);
-}
-
-function findServerTurnRangeByOrdinal(
-  serverMessages: NormalizedMessage[],
-  turnOrdinal: number,
-): { start: number; end: number } | null {
-  let userCount = -1;
-  let start = -1;
-
-  for (let index = 0; index < serverMessages.length; index++) {
-    const message = serverMessages[index];
-    if (message.kind === 'text' && message.role === 'user') {
-      userCount++;
-      if (userCount === turnOrdinal) {
-        start = index;
-        break;
-      }
-    }
-  }
-
-  if (start < 0) {
-    return null;
-  }
-
-  let end = serverMessages.length;
-  for (let index = start + 1; index < serverMessages.length; index++) {
-    if (serverMessages[index].kind === 'text' && serverMessages[index].role === 'user') {
-      end = index;
-      break;
-    }
-  }
-
-  return { start, end };
-}
-
-function isAssistantTextEchoedInSameTurnOnServer(
-  message: NormalizedMessage,
-  serverMessages: NormalizedMessage[],
-  realtimeMessages: NormalizedMessage[],
-): boolean {
-  const assistantText = (message.content || '').trim();
-  if (!assistantText) {
-    return false;
-  }
-
-  const turnOrdinal = getUserTurnOrdinalBefore(message, serverMessages, realtimeMessages);
-  const turnRange = findServerTurnRangeByOrdinal(serverMessages, turnOrdinal);
-  if (!turnRange) {
-    return false;
-  }
-
-  return serverMessages
-    .slice(turnRange.start + 1, turnRange.end)
-    .some((serverMessage) =>
-      serverMessage.kind === 'text'
-      && serverMessage.role === 'assistant'
-      && (serverMessage.content || '').trim() === assistantText,
-    );
-}
-
-/**
- * After `finalizeStreaming`, the client holds a synthetic assistant `text` row
- * while the sessions API soon returns the same reply with a different id.
- * Those sit back-to-back in merged order and look like duplicate bubbles until
- * A persisted-tail refresh reconciles realtime. Collapse same-text assistant rows and
- * stream_placeholder → text when content matches.
- */
-function dedupeAdjacentAssistantEchoes(merged: NormalizedMessage[]): NormalizedMessage[] {
-  const indexes = new Map<string, number>();
-  const out: NormalizedMessage[] = [];
-  for (const message of merged) {
-    const key = message.messageKey || `${message.kind}:${message.id}`;
-    const index = indexes.get(key);
-    if (index === undefined) { indexes.set(key, out.length); out.push(message); }
-    else {
-      const previous = out[index];
-      // A late partial snapshot must never replace the authoritative completed item.
-      if (message.kind === 'stream_delta' && previous.kind === 'text'
-        && (previous.content?.length ?? 0) >= (message.content?.length ?? 0)) continue;
-      out[index] = { ...message, timestamp: previous.timestamp, firstSeq: previous.firstSeq ?? message.firstSeq };
-    }
-  }
-  return out;
-}
-
-/**
- * After a server refresh, drop only the realtime rows the persisted transcript
- * already owns. Anything not yet on disk (common right after `complete`, while
- * JSONL indexing lags) stays in `realtimeMessages` so the chat pane never
- * flashes the empty "Continue your conversation" state.
- */
-// Earlier Claude adapters restarted the block index for every JSONL row.
-// Repair those cached/replayed aliases only within the same native API response;
-// matching by text across responses would erase legitimate repeated replies.
-function reconcileClaudeBlockAliases(
-  persisted: NormalizedMessage[], live: NormalizedMessage[], positions?: Map<string, number>,
-): NormalizedMessage[] {
-  const responseId = (row: NormalizedMessage) => row.provider === 'claude'
-    ? /^claude(?:-block)?:([^:]+):\d+$/.exec(row.messageKey || row.id)?.[1] : undefined;
-  const canonical = [...new Map(persisted.map(row => [timelineIdentity(row), row])).values()];
-  return live.map(row => {
-    if (row.provider !== 'claude' || (row.messageKey || row.id).startsWith('claude-block:')) return row;
-    const response = responseId(row);
-    const candidates = canonical.filter(candidate => {
-      if (candidate.provider !== 'claude') return false;
-      if (row.kind === 'tool_use') return candidate.kind === 'tool_use' && Boolean(row.toolId) && row.toolId === candidate.toolId;
-      if (!response || responseId(candidate) !== response || !row.content || !candidate.content) return false;
-      if (row.kind === 'thinking') return candidate.kind === 'thinking' && candidate.content === row.content;
-      if (candidate.kind !== 'text' || candidate.role !== 'assistant' || (row.kind !== 'stream_delta' && !(row.kind === 'text' && row.role === 'assistant'))) return false;
-      return candidate.content === row.content || row.kind === 'stream_delta'
-        && (candidate.content.startsWith(row.content) || row.content.startsWith(candidate.content));
-    });
-    if (candidates.length !== 1) return row;
-    const target = candidates[0];
-    if (target.id === row.id && target.messageKey === row.messageKey) return row;
-    const position = row.firstSeq ?? row.seq;
-    if (positions && position !== undefined) {
-      const key = timelineIdentity(target);
-      positions.set(key, Math.min(positions.get(key) ?? position, position));
-    }
-    return { ...row, id: target.id, messageKey: target.messageKey };
-  });
-}
-
-function pruneRealtimeSupersededByServer(
-  serverMessages: NormalizedMessage[],
-  realtimeMessages: NormalizedMessage[],
-  positions?: Map<string, number>,
-): NormalizedMessage[] {
-  realtimeMessages = reconcileClaudeBlockAliases(serverMessages, realtimeMessages, positions);
-  if (realtimeMessages.length === 0) {
-    return realtimeMessages;
-  }
-
-  const serverIds = new Set(serverMessages.map((message) => message.id));
-  const reconciledRealtimeMessages = removeOptimisticUserEchoes(serverMessages, realtimeMessages);
-
-  return reconciledRealtimeMessages.filter((message) => {
-    const persisted = serverMessages.find(row => message.messageKey && row.messageKey === message.messageKey);
+  const candidates = slot.realtimeMessages;
+  const echoMatches = new Map([
+    ...matchPersistedUserEchoes(server, candidates),
+    ...matchKeylessAssistantEchoes(server, candidates),
+  ]);
+  const persistedAs = candidates.map((row): string | undefined => {
+    const identity = timelineIdentity(row);
+    const persisted = persistedByIdentity.get(identity);
     if (persisted) {
-      if (persisted.content === message.content || (message.kind === 'stream_delta' && persisted.content?.startsWith(message.content || ''))) return false;
-      return true;
+      // A stream ahead of the transcript is still live; the merge shows it.
+      return liveTextIsAhead(row, persisted) ? undefined : identity;
     }
-    if (serverIds.has(message.id)) {
-      return false;
-    }
-
-    if (message.kind === 'stream_delta' || message.id === `__streaming_${message.sessionId}`) {
-      if ((!message.messageKey || message.messageKey.startsWith('legacy:')) && isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages)) {
-        return false;
-      }
-      return true;
-    }
-
-    if (message.kind === 'text' && message.role === 'assistant') {
-      if ((!message.messageKey || message.messageKey.startsWith('legacy:')) && isAssistantTextEchoedInSameTurnOnServer(message, serverMessages, realtimeMessages)) {
-        return false;
-      }
-      return true;
-    }
-
-    if (message.kind === 'text' && message.role === 'user') {
-      return true;
-    }
-
-    if (message.kind === 'tool_use' && message.toolId) {
-      if (serverMessages.some((serverMessage) => serverMessage.kind === 'tool_use' && serverMessage.toolId === message.toolId)) {
-        return false;
-      }
-    }
-
-    return true;
+    const echo = echoMatches.get(row);
+    if (echo) return timelineIdentity(echo);
+    return row.kind === 'tool_result' && row.toolId ? callIdentityByResultToolId.get(row.toolId) : undefined;
   });
-}
 
-function timelineIdentity(row: NormalizedMessage): string {
-  return row.messageKey || (row.toolId ? `${row.kind}:${row.toolId}` : row.id);
-}
-function isLegacyControlSignal(row: NormalizedMessage): boolean {
-  return row.provider === 'codex' && row.kind === 'tool_use' && (['subAgentActivity', 'SubAgentActivity'].includes(row.toolName || '')
-    || row.toolName === 'TodoWrite' && (row.toolId || row.id).endsWith('-plan'));
-}
-
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[], positions: Map<string, number>, hasMore: boolean): NormalizedMessage[] {
-  const identity = timelineIdentity;
-  const rows = [...server];
-  const indexes = new Map(server.map((row, index) => [identity(row), index]));
-  const reconciled = removeOptimisticUserEchoes(server, reconcileClaudeBlockAliases(server, realtime, positions)).filter(row => !isLegacyControlSignal(row));
-  // Compacted replay delivers a growing item's latest snapshot later than its
-  // first fragment. Restore first-delivery order before interleaving history.
-  const sequenced = reconciled.filter(row => typeof row.seq === 'number')
-    .sort((a,b) => (a.firstSeq ?? a.seq!) - (b.firstSeq ?? b.seq!));
-  let sequenceIndex = 0;
-  const live = reconciled.map(row => typeof row.seq === 'number' ? sequenced[sequenceIndex++] : row);
-  const nextAnchor: number[] = new Array(live.length);
-  let next = server.length;
-  for (let i = live.length - 1; i >= 0; i--) {
-    const index = indexes.get(identity(live[i]));
-    if (index !== undefined) next = index;
-    nextAnchor[i] = next;
-  }
-  const persistedAnchors = server.flatMap((row, index) => {
-    const sequence = positions.get(identity(row));
-    return sequence === undefined ? [] : [{ index, sequence }];
-  });
-  const oldestPersistedSequence = persistedAnchors.length ? Math.min(...persistedAnchors.map(anchor => anchor.sequence)) : undefined;
-  const buckets = new Map<number, NormalizedMessage[]>();
-  let preceding = -1;
-  let minimumSequencedInsertion = 0;
-  for (let i = 0; i < live.length; i++) {
-    const message = live[i], index = indexes.get(identity(message));
-    if (index !== undefined) {
-      preceding = index;
-      if (message.seq !== undefined) minimumSequencedInsertion = Math.max(minimumSequencedInsertion, index + 1);
-      const persisted = rows[index];
-      if ((message.kind === 'stream_delta' && (message.content?.length ?? 0) > (persisted.content?.length ?? 0))
-        || (message.messageKey && message.kind === 'text' && message.content !== persisted.content))
-        rows[index] = { ...message, timestamp: persisted.timestamp };
+  const serverIndex = new Map(server.map((row, index) => [timelineIdentity(row), index]));
+  const kept: NormalizedMessage[] = [];
+  let previousPersisted: string | undefined;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const row = candidates[index];
+    const identity = timelineIdentity(row);
+    if (persistedAs[index]) {
+      anchors.delete(identity);
+      previousPersisted = persistedAs[index];
       continue;
     }
-    // Persisted order is authoritative. Live rows keep their delivery order
-    // between shared anchors; provider/client clock skew cannot reshuffle it.
-    let insertion = preceding >= 0 ? preceding + 1 : nextAnchor[i];
-    const sequence = positions.get(identity(message));
-    if (sequence !== undefined && persistedAnchors.length) {
-      // A replay may include older turns outside the loaded history window.
-      // Keep them in the store for upward paging, not after the newest answer.
-      const firstRowPosition = server[0] ? positions.get(identity(server[0])) : undefined;
-      const messageTime = readMessageTime(message), firstRowTime = server[0] ? readMessageTime(server[0]) : null;
-      // The first matching anchor may follow unsequenced rows in the page.
-      // It is not a safe cutoff for a pending command that began between them.
-      const precedesWindow = firstRowPosition !== undefined ? sequence < firstRowPosition
-        : oldestPersistedSequence !== undefined && sequence < oldestPersistedSequence
-          && messageTime !== null && firstRowTime !== null && messageTime < firstRowTime;
-      if (hasMore && precedesWindow) continue;
-      const earlier = persistedAnchors.filter(anchor => anchor.sequence <= sequence);
-      insertion = earlier.length ? Math.max(...earlier.map(anchor => anchor.index)) + 1 : 0;
-      if (!earlier.length && firstRowPosition === undefined && messageTime !== null) {
-        const firstAnchorIndex = Math.min(...persistedAnchors.map(anchor => anchor.index));
-        const after = server.slice(0, firstAnchorIndex + 1).findIndex(row => (readMessageTime(row) ?? Infinity) > messageTime);
-        insertion = after >= 0 ? after : firstAnchorIndex;
-      }
-      // History may already contain a new user prompt that was never echoed
-      // through the journal. An old assistant anchor alone must not place the
-      // first reply fragment before that prompt. Advance within the unsequenced
-      // gap using native timestamps, never across a later delivery anchor.
-      if (earlier.length && messageTime !== null) {
-        const later = persistedAnchors.filter(anchor => anchor.sequence > sequence && anchor.index >= insertion);
-        const boundary = later.length ? Math.min(...later.map(anchor => anchor.index)) : server.length;
-        while (insertion < boundary && !positions.has(identity(server[insertion]))) {
-          const time = readMessageTime(server[insertion]);
-          if (time === null || time > messageTime) break;
-          insertion++;
-        }
-      }
+
+    kept.push(row);
+    const existing = anchors.get(identity);
+    const existingAfter = existing?.after !== undefined && serverIndex.has(existing.after) ? existing.after : undefined;
+    const existingBefore = existing?.before !== undefined && serverIndex.has(existing.before) ? existing.before : undefined;
+
+    // Every persisted row delivered before this one is a lower bound on where
+    // it belongs; the newest of them is the tightest, so it wins over an
+    // older lower bound remembered from arrival.
+    const after = [previousPersisted, existingAfter].filter((bound): bound is string => bound !== undefined)
+      .sort((a, b) => serverIndex.get(b)! - serverIndex.get(a)!)[0];
+
+    // An established position before a persisted neighbour is already more
+    // precise than a newly delivered lower bound farther back in history.
+    // Preserve it unless the lower bound actually passes that neighbour.
+    if (existingBefore && (!after || serverIndex.get(after)! < serverIndex.get(existingBefore)!)) {
+      const nextPersisted = persistedAs.slice(index + 1).find(Boolean);
+      const before = nextPersisted && serverIndex.get(nextPersisted)! < serverIndex.get(existingBefore)!
+        && (!after || serverIndex.get(nextPersisted)! > serverIndex.get(after)!) ? nextPersisted : existingBefore;
+      anchors.set(identity, { before });
+      continue;
     }
-    if (message.seq !== undefined) {
-      insertion = Math.max(insertion, minimumSequencedInsertion);
-      minimumSequencedInsertion = insertion;
+    if (after) {
+      anchors.set(identity, { after });
+      continue;
     }
-    if (!message.messageKey && !message.seq && !message.replacesAnchorId && preceding < 0 && insertion === server.length) {
-      // Unsequenced legacy/local echoes have no server identity yet.
-      const time = readMessageTime(message);
-      const found = time === null ? -1 : server.findIndex(row => (readMessageTime(row) ?? 0) > time);
-      if (found >= 0) insertion = found;
+
+    // Short of a lower bound, the earliest persisted row delivered after it
+    // is the tightest upper bound.
+    const nextPersisted = persistedAs.slice(index + 1).find(Boolean);
+    const before = [nextPersisted, existingBefore].filter((bound): bound is string => bound !== undefined)
+      .sort((a, b) => serverIndex.get(a)! - serverIndex.get(b)!)[0];
+    if (before) {
+      anchors.set(identity, { before });
+      continue;
     }
-    const bucket = buckets.get(insertion) ?? [];
-    bucket.push(message); buckets.set(insertion, bucket);
+
+    // No persisted neighbour and no usable anchor: a replayed row whose turn
+    // the loaded page does not reach, or a row whose anchor left the cache.
+    // Its own clock is the only placement left; it is used once, here, and
+    // then the anchor holds. Not for the echo of an edit's replacement: it is
+    // the newest thing in the conversation by definition, and a provider that
+    // rewinds by copying the kept turns re-stamps them later than it was typed.
+    if (row.replacesAnchorId) {
+      anchors.delete(identity);
+      continue;
+    }
+    const time = Date.parse(row.timestamp);
+    const laterIndex = Number.isFinite(time) ? server.findIndex((candidate) => (Date.parse(candidate.timestamp) || 0) > time) : -1;
+    if (laterIndex >= 0) anchors.set(identity, { before: timelineIdentity(server[laterIndex]) });
+    else anchors.delete(identity);
   }
+
+  const keptIdentities = new Set(kept.map(timelineIdentity));
+  for (const identity of [...anchors.keys()]) {
+    if (!keptIdentities.has(identity)) anchors.delete(identity);
+  }
+
+  const unchanged = kept.length === slot.realtimeMessages.length && kept.every((row, index) => row === slot.realtimeMessages[index]);
+  if (!unchanged) slot.realtimeMessages = kept;
+}
+
+// ─── Merge ───────────────────────────────────────────────────────────────────
+
+function computeMerged(server: NormalizedMessage[], live: NormalizedMessage[], anchors: Map<string, LiveAnchor>): NormalizedMessage[] {
+  const rows = [...server];
+  const indexByIdentity = new Map(server.map((row, index) => [timelineIdentity(row), index]));
+  const before = new Map<number, NormalizedMessage[]>();
+  const after = new Map<number, NormalizedMessage[]>();
+  const tail: NormalizedMessage[] = [];
+  const bucket = (map: Map<number, NormalizedMessage[]>, index: number, row: NormalizedMessage) => {
+    const list = map.get(index);
+    if (list) list.push(row); else map.set(index, [row]);
+  };
+
+  for (const row of live) {
+    const identity = timelineIdentity(row);
+    const index = indexByIdentity.get(identity);
+    if (index !== undefined) {
+      // The persisted copy is authoritative, except that a stream still ahead
+      // of what the transcript holds is the fresher text.
+      const persisted = rows[index];
+      if (liveTextIsAhead(row, persisted)) {
+        rows[index] = { ...row, timestamp: persisted.timestamp };
+      }
+      continue;
+    }
+
+    const anchor = anchors.get(identity);
+    const afterIndex = anchor?.after !== undefined ? indexByIdentity.get(anchor.after) : undefined;
+    if (afterIndex !== undefined) { bucket(after, afterIndex, row); continue; }
+    const beforeIndex = anchor?.before !== undefined ? indexByIdentity.get(anchor.before) : undefined;
+    if (beforeIndex !== undefined) { bucket(before, beforeIndex, row); continue; }
+    tail.push(row);
+  }
+
   const merged: NormalizedMessage[] = [];
-  for (let i = 0; i <= rows.length; i++) {
-    merged.push(...(buckets.get(i) ?? []));
-    if (i < rows.length) merged.push(rows[i]);
-  }
-  return dedupeAdjacentAssistantEchoes(merged);
+  rows.forEach((row, index) => {
+    const leading = before.get(index);
+    if (leading) merged.push(...leading);
+    merged.push(row);
+    const trailing = after.get(index);
+    if (trailing) merged.push(...trailing);
+  });
+  merged.push(...tail);
+  return merged;
 }
 
 /**
@@ -490,14 +357,51 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
  * (by reference). Returns true if merged was recomputed.
  */
 function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
-  if (slot.serverMessages === slot._lastServerRef && slot.realtimeMessages === slot._lastRealtimeRef && slot.hasMore === slot._lastHasMore) {
+  if (slot.serverMessages === slot._lastServerRef && slot.realtimeMessages === slot._lastRealtimeRef) {
     return false;
   }
   slot._lastServerRef = slot.serverMessages;
   slot._lastRealtimeRef = slot.realtimeMessages;
-  slot._lastHasMore = slot.hasMore;
-  slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages, slot._deliveryPositions, slot.hasMore);
+  slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages, slot._liveAnchors);
   return true;
+}
+
+/**
+ * Applies a journal revision carried by a history page. A revision is stamped
+ * when the transcript is cut for an edit; live rows delivered before it belong
+ * to the branch that was cut away, except the echo of the replacement itself.
+ */
+function applyTimelineRevision(slot: SessionSlot, revision: number | undefined): boolean {
+  if (revision === undefined || revision <= (slot.timelineRevision ?? 0)) return false;
+  slot.realtimeMessages = slot.realtimeMessages.filter((row) => (row.seq ?? 0) >= revision || Boolean(row.replacesAnchorId));
+  slot.timelineRevision = revision;
+  return true;
+}
+
+// Token usage is JSON response data, so compare its serialized value instead
+// of treating each freshly parsed response object as a state change.
+function hasEquivalentTokenUsage(left: unknown, right: unknown): boolean {
+  return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
+}
+
+function olderPagePrecedesCachedHistory(olderMessages: NormalizedMessage[], cachedMessages: NormalizedMessage[]): boolean {
+  const olderNewest = olderMessages[olderMessages.length - 1];
+  const cachedOldest = cachedMessages[0];
+  if (!olderNewest || !cachedOldest) return true;
+  const olderTime = Date.parse(olderNewest.timestamp);
+  const cachedTime = Date.parse(cachedOldest.timestamp);
+  return !Number.isFinite(olderTime) || !Number.isFinite(cachedTime) || olderTime <= cachedTime;
+}
+
+/** Adopts a page's rows while keeping the object identity of rows that did not change, so memoized rows skip work. */
+function retainUnchangedRows(previous: NormalizedMessage[], next: NormalizedMessage[]): NormalizedMessage[] {
+  const previousByIdentity = new Map(previous.map((row) => [timelineIdentity(row), row]));
+  const retained = next.map((row) => {
+    const candidate = previousByIdentity.get(timelineIdentity(row));
+    return candidate && (candidate === row || JSON.stringify(candidate) === JSON.stringify(row)) ? candidate : row;
+  });
+  const same = retained.length === previous.length && retained.every((row, index) => row === previous[index]);
+  return same ? previous : retained;
 }
 
 type LatestHistoryRefreshResult = {
@@ -508,29 +412,14 @@ type LatestHistoryRefreshResult = {
 
 type CanRequestHistory = () => boolean;
 
-// Token usage is JSON response data, so compare its serialized value instead
-// of treating each freshly parsed response object as a state change.
-function hasEquivalentTokenUsage(left: unknown, right: unknown): boolean {
-  return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
-}
-
-function olderPagePrecedesCachedHistory(
-  olderMessages: NormalizedMessage[],
-  cachedMessages: NormalizedMessage[],
-): boolean {
-  const olderNewest = olderMessages[olderMessages.length - 1];
-  const cachedOldest = cachedMessages[0];
-  if (!olderNewest || !cachedOldest) return true;
-
-  const olderTime = readMessageTime(olderNewest);
-  const cachedTime = readMessageTime(cachedOldest);
-  return olderTime === null || cachedTime === null || olderTime <= cachedTime;
-}
-
 /**
- * Fetches and atomically applies a bounded persisted-tail reconciliation.
- * Every request is finite. Claude/Codex bridge discovery may use more than one
- * bounded chunk because their response `total` omits paginated tool results.
+ * Refreshes the persisted tail and stitches it onto the cached pages.
+ *
+ * The latest page normally overlaps the cached tail and replaces it. When a
+ * whole page or more was added since the last refresh, a few older pages are
+ * walked back through the cursor API until the overlap is found; failing that
+ * the cache is replaced by the fetched window, which is always a correct
+ * transcript suffix even if it drops already-loaded older pages.
  */
 async function refreshLatestSlotFromServer(
   sessionId: string,
@@ -542,152 +431,79 @@ async function refreshLatestSlotFromServer(
     return { applied: false, changed: false, deferred: true };
   }
 
-  let previousServerMessages = slot.serverMessages;
-  const previousTotal = slot.total;
-  let previousHasMore = slot.hasMore;
-  const latestPage = await requestSessionHistoryPage(sessionId, {
-    limit,
-    offset: 0,
-  });
-
-  if (latestPage.timelineRevision !== undefined && latestPage.timelineRevision < (slot.timelineRevision ?? 0)) return { applied: false, changed: false, deferred: false };
-  if ((latestPage.timelineRevision ?? 0) > (slot.timelineRevision ?? 0)) {
-    slot.realtimeMessages = slot.realtimeMessages.filter(row => (row.seq ?? 0) >= latestPage.timelineRevision! || Boolean(row.replacesAnchorId));
-    slot.timelineRevision = latestPage.timelineRevision;
-    previousServerMessages = [];
-    previousHasMore = latestPage.hasMore;
+  const latestPage = await requestSessionHistoryPage(sessionId, { limit, offset: 0 });
+  if (latestPage.timelineRevision !== undefined && latestPage.timelineRevision < (slot.timelineRevision ?? 0)) {
+    return { applied: false, changed: false, deferred: false };
   }
-  let nextServerMessages: NormalizedMessage[] | null = null;
-  let nextHasMore = previousHasMore;
+  const revised = applyTimelineRevision(slot, latestPage.timelineRevision);
+  const cached = revised ? EMPTY : slot.serverMessages;
 
-  // A page with no older rows is the complete authoritative transcript. This
-  // also removes cached rows after a provider-side truncation.
-  if (!latestPage.hasMore) {
-    nextServerMessages = latestPage.messages;
-    nextHasMore = false;
-  } else if (previousServerMessages.length === 0) {
-    nextServerMessages = latestPage.messages;
-    nextHasMore = true;
+  let fetchedWindow = latestPage.messages;
+  let oldestFetchedPage = latestPage;
+  let nextServerMessages: NormalizedMessage[];
+  let nextHasMore: boolean;
+
+  if (!latestPage.hasMore || cached.length === 0) {
+    // A page with no older rows is the complete authoritative transcript. This
+    // also removes cached rows after a provider-side truncation.
+    nextServerMessages = fetchedWindow;
+    nextHasMore = latestPage.hasMore;
   } else {
-    let fetchedWindow = latestPage.messages;
-    let oldestFetchedPage = latestPage;
-    let bridgeRowsFetched = 0;
-    let reachedStartOfHistory = false;
-    let mergedPage = mergeLatestServerPage(previousServerMessages, fetchedWindow);
-
-    while (
-      mergedPage.overlapLength === 0
-      && !hasReachedCachedTailTimeBoundary(previousServerMessages, fetchedWindow)
-    ) {
-      const bridgeRequest = planLatestPageBridge(
-        previousServerMessages,
-        latestPage.messages,
-        previousTotal,
-        latestPage.total,
-        bridgeRowsFetched,
-      );
-      if (!bridgeRequest) break;
+    let stitched = mergeLatestServerPage(cached, fetchedWindow);
+    for (let page = 0; stitched.overlapLength === 0 && page < MAX_REFRESH_BRIDGE_PAGES && oldestFetchedPage.hasMore; page += 1) {
       if (!canRequest()) {
         return { applied: false, changed: false, deferred: true };
       }
-
-      const bridgeCursor = oldestFetchedPage.oldestCursor;
-      const bridgePage = await requestSessionHistoryPage(sessionId, bridgeCursor
-        ? { limit, before: bridgeCursor } : bridgeRequest);
-      if ((!bridgeCursor && bridgePage.total !== latestPage.total) || (bridgePage.timelineRevision ?? 0) !== (latestPage.timelineRevision ?? 0)) {
-        console.warn(`[SessionStore] History changed while bridging ${sessionId}; retaining cached suffix.`);
-        return { applied: false, changed: false, deferred: false };
-      }
-      if (bridgePage.messages.length === 0) break;
-
-      const bridgeMerge = mergeOlderServerPage(fetchedWindow, bridgePage.messages);
-      if (
-        bridgeMerge.overlapLength > 0
-        || !olderPagePrecedesCachedHistory(bridgePage.messages, fetchedWindow)
-      ) {
-        console.warn(`[SessionStore] History shifted while bridging ${sessionId}; retaining cached suffix.`);
-        return { applied: false, changed: false, deferred: false };
-      }
-
-      fetchedWindow = bridgeMerge.messages;
-      oldestFetchedPage = bridgePage;
-      bridgeRowsFetched += bridgePage.messages.length;
-      mergedPage = mergeLatestServerPage(previousServerMessages, fetchedWindow);
-
-      if (!bridgePage.hasMore) {
-        reachedStartOfHistory = true;
-        break;
-      }
+      const cursor = oldestFetchedPage.oldestCursor;
+      if (!cursor) break;
+      const olderPage = await requestSessionHistoryPage(sessionId, { limit, before: cursor });
+      if (olderPage.messages.length === 0) break;
+      fetchedWindow = mergeOlderServerPage(fetchedWindow, olderPage.messages).messages;
+      oldestFetchedPage = olderPage;
+      stitched = mergeLatestServerPage(cached, fetchedWindow);
     }
-
-    if (reachedStartOfHistory) {
+    if (stitched.overlapLength > 0) {
+      nextServerMessages = stitched.messages;
+      nextHasMore = slot.hasMore && oldestFetchedPage.hasMore;
+    } else {
+      console.warn(`[SessionStore] Latest history of ${sessionId} does not reach the cached rows; replacing them with the fetched window.`);
       nextServerMessages = fetchedWindow;
-      nextHasMore = false;
-    } else if (mergedPage.overlapLength > 0) {
-      nextServerMessages = mergedPage.messages;
-      nextHasMore = resolveLatestPagePagination(
-        previousServerMessages.length,
-        nextServerMessages.length,
-        previousHasMore,
-        oldestFetchedPage.hasMore,
-      ).hasMore;
+      nextHasMore = oldestFetchedPage.hasMore;
     }
   }
 
-  let changed = false;
-  if (
-    latestPage.tokenUsage !== undefined
-    && !hasEquivalentTokenUsage(latestPage.tokenUsage, slot.tokenUsage)
-  ) {
+  let changed = revised;
+  if (latestPage.tokenUsage !== undefined && !hasEquivalentTokenUsage(latestPage.tokenUsage, slot.tokenUsage)) {
     slot.tokenUsage = latestPage.tokenUsage;
     changed = true;
   }
 
-  if (!nextServerMessages) {
-    console.warn(`[SessionStore] Could not bridge latest history for ${sessionId}; retaining cached suffix.`);
-    return { applied: false, changed, deferred: false };
-  }
-
-  // Retain unchanged row objects so periodic reconciliation does not reparse
-  // settled Markdown or rebuild tools. Only the fetched tail normally differs.
-  nextServerMessages = nextServerMessages.map((row, index) => {
-    const previous = slot.serverMessages[index];
-    return previous && (previous === row || (previous.id === row.id && JSON.stringify(previous) === JSON.stringify(row))) ? previous : row;
-  });
-  const sameRows = nextServerMessages.length === slot.serverMessages.length && nextServerMessages.every((row,index) => row === slot.serverMessages[index]);
-  if (sameRows) nextServerMessages = slot.serverMessages;
-  slot.serverMessages = nextServerMessages;
-  slot.oldestCursor = nextServerMessages[0]?.messageKey || nextServerMessages[0]?.id;
+  slot.serverMessages = retainUnchangedRows(slot.serverMessages, nextServerMessages);
+  slot.oldestCursor = slot.serverMessages[0]?.messageKey || slot.serverMessages[0]?.id;
   slot.total = latestPage.total;
-  slot.offset = nextServerMessages.length;
+  slot.offset = slot.serverMessages.length;
   slot.hasMore = nextHasMore;
   slot.fetchedAt = Date.now();
-  const remaining = pruneRealtimeSupersededByServer(slot.serverMessages, slot.realtimeMessages, slot._deliveryPositions);
-  if (remaining.length !== slot.realtimeMessages.length || remaining.some((row,index) => row !== slot.realtimeMessages[index])) slot.realtimeMessages = remaining;
+  reconcileLiveWithServer(slot);
   changed = recomputeMergedIfNeeded(slot) || changed;
 
   return { applied: true, changed, deferred: false };
 }
 
-// ─── Stale threshold ─────────────────────────────────────────────────────────
-
-const STALE_THRESHOLD_MS = 30_000;
-
-const MAX_REALTIME_MESSAGES = 500;
-
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
+  // Retain each session's history and pending live rows across view switches.
   const storeRef = useRef(new Map<string, SessionSlot>());
+  // Only the viewed session needs to trigger a React render when it changes.
   const activeSessionIdRef = useRef<string | null>(null);
   // Bump to force re-render — only when the active session's data changes.
   // Session ids are stable for the whole conversation lifetime (the backend
-  // allocates them before the first send), so slots are keyed directly with
-  // no alias/redirect indirection.
+  // allocates them before the first send), so slots are keyed directly.
   const [, setTick] = useState(0);
   const notify = useCallback((sessionId: string) => {
     if (sessionId === activeSessionIdRef.current) {
-      setTick(n => n + 1);
+      setTick((n) => n + 1);
     }
   }, []);
 
@@ -711,11 +527,7 @@ export function useSessionStore() {
    */
   const fetchFromServer = useCallback(async (
     sessionId: string,
-    opts: {
-      limit?: number | null;
-      offset?: number;
-      canRequest?: CanRequestHistory;
-    } = {},
+    opts: { limit?: number | null; offset?: number; canRequest?: CanRequestHistory } = {},
   ) => {
     const slot = getSlot(sessionId);
     slot.status = 'loading';
@@ -732,25 +544,19 @@ export function useSessionStore() {
       try {
         const data = await requestSessionHistoryPage(sessionId, requestOptions);
         if ((data.timelineRevision ?? 0) < (slot.timelineRevision ?? 0)) return slot;
-        if ((data.timelineRevision ?? 0) > (slot.timelineRevision ?? 0)) slot.realtimeMessages = slot.realtimeMessages.filter(row => (row.seq ?? 0) >= data.timelineRevision! || Boolean(row.replacesAnchorId));
-        slot.timelineRevision = data.timelineRevision;
-        slot.serverMessages = data.messages;
+        applyTimelineRevision(slot, data.timelineRevision);
+        slot.serverMessages = retainUnchangedRows(slot.serverMessages, data.messages);
         slot.oldestCursor = data.oldestCursor;
         slot.total = data.total;
         slot.hasMore = data.hasMore;
         slot.offset = (requestOptions.offset ?? 0) + data.messages.length;
         slot.fetchedAt = Date.now();
         slot.status = 'idle';
-        slot.realtimeMessages = pruneRealtimeSupersededByServer(
-          slot.serverMessages,
-          slot.realtimeMessages,
-          slot._deliveryPositions,
-        );
+        reconcileLiveWithServer(slot);
         recomputeMergedIfNeeded(slot);
         if (data.tokenUsage !== undefined) {
           slot.tokenUsage = data.tokenUsage;
         }
-
         notify(sessionId);
         return slot;
       } catch (error) {
@@ -767,10 +573,7 @@ export function useSessionStore() {
    */
   const fetchMore = useCallback(async (
     sessionId: string,
-    opts: {
-      limit?: number;
-      canRequest?: CanRequestHistory;
-    } = {},
+    opts: { limit?: number; canRequest?: CanRequestHistory } = {},
   ) => {
     const slot = getSlot(sessionId);
     return enqueueHistoryMutation(slot, async () => {
@@ -780,34 +583,28 @@ export function useSessionStore() {
       if (!slot.hasMore || !canRequest()) return { slot, prependedCount };
 
       try {
-        // A tail-relative offset can shift while JSONL is still growing. One
-        // bounded latest-page reconciliation realigns the cache, after which
-        // the older-page request is retried once with the new raw-row offset.
+        // A tail-relative offset can shift while the transcript is still
+        // growing. One latest-page refresh realigns the cache, after which the
+        // older-page request is retried once.
         for (let attempt = 0; attempt < 2 && slot.hasMore; attempt++) {
           if (!canRequest()) break;
 
           const cachedMessages = slot.serverMessages;
-          const expectedTotal = slot.total;
           const cursor = slot.oldestCursor;
           const data = await requestSessionHistoryPage(sessionId, {
             limit: opts.limit ?? SESSION_MESSAGES_PAGE_SIZE,
             ...(cursor ? { before: cursor } : { offset: slot.offset }),
           });
           const olderMerge = mergeOlderServerPage(cachedMessages, data.messages);
-          const shiftedWhileFetching = (data.timelineRevision ?? 0) !== (slot.timelineRevision ?? 0) || !cursor && (
-            data.total !== expectedTotal
+          const shiftedWhileFetching = (data.timelineRevision ?? 0) !== (slot.timelineRevision ?? 0) || (!cursor && (
+            data.total !== slot.total
             || olderMerge.overlapLength > 0
             || !olderPagePrecedesCachedHistory(data.messages, cachedMessages)
-          );
+          ));
 
           if (shiftedWhileFetching) {
             if (attempt > 0 || !canRequest()) break;
-            const latestResult = await refreshLatestSlotFromServer(
-              sessionId,
-              slot,
-              SESSION_MESSAGES_PAGE_SIZE,
-              canRequest,
-            );
+            const latestResult = await refreshLatestSlotFromServer(sessionId, slot, SESSION_MESSAGES_PAGE_SIZE, canRequest);
             changed = changed || latestResult.changed;
             if (!latestResult.applied) break;
             continue;
@@ -822,6 +619,7 @@ export function useSessionStore() {
           if (data.tokenUsage !== undefined) {
             slot.tokenUsage = data.tokenUsage;
           }
+          reconcileLiveWithServer(slot);
           recomputeMergedIfNeeded(slot);
           changed = true;
           break;
@@ -838,10 +636,6 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * Append a realtime (WebSocket) message to the correct session slot.
-   * This works regardless of which session is actively viewed.
-   */
-  /**
    * Drops the message carrying `anchorId` and everything after it.
    *
    * Sent when an already-sent message is edited: the replacement streams in
@@ -853,23 +647,23 @@ export function useSessionStore() {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
 
-    const cutIndex = slot.serverMessages.findIndex(
-      (message) => message.transcriptAnchorId === anchorId,
-    );
+    const cutIndex = slot.serverMessages.findIndex((message) => message.transcriptAnchorId === anchorId);
     if (cutIndex < 0) return;
 
     slot.serverMessages = slot.serverMessages.slice(0, cutIndex);
     // Anything already streamed belonged to the turn being replaced — except
     // the replacement itself. The client that made the edit appends its
     // optimistic echo before the server acknowledges, so clearing live rows
-    // outright took the message the user had just sent with it, and it only
-    // came back when the run finished and the transcript was re-read.
+    // outright took the message the user had just sent with it.
     // Only the last one: a send that was refused leaves its echo behind, so a
     // second attempt at the same message would otherwise survive the cut
     // alongside the abandoned first and show the user both.
-    const replacements = slot.realtimeMessages.filter(
-      (message) => message.replacesAnchorId === anchorId,
-    );
+    const replacements = slot.realtimeMessages.filter((message) => message.replacesAnchorId === anchorId);
+    slot._liveAnchors.clear();
+    const lastKept = slot.serverMessages[slot.serverMessages.length - 1];
+    if (replacements.length > 0 && lastKept) {
+      slot._liveAnchors.set(timelineIdentity(replacements[replacements.length - 1]), { after: timelineIdentity(lastKept) });
+    }
     slot.realtimeMessages = replacements.length > 0
       // Stamped here because this is the only place that knows how much of the
       // conversation survived, which is what tells the echo apart from the
@@ -884,67 +678,95 @@ export function useSessionStore() {
     notify(sessionId);
   }, [notify]);
 
+  /**
+   * Append a realtime (WebSocket) message to the correct session slot.
+   * This works regardless of which session is actively viewed.
+   *
+   * A row already held live (same identity) is replaced in place: providers
+   * emit full snapshots of an item as it grows, and appending each one would
+   * inflate tool groups and evict real history from the bounded live list.
+   * A new row is anchored after the newest persisted row, and is ordered among
+   * live rows by first delivery (`firstSeq`), so a reply replayed after the
+   * tools that followed its first fragment still comes before them.
+   */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
     msg = cleanProviderUserMessage(msg);
     if (isLegacyControlSignal(msg)) return;
     slot.lastRealtimeAt = Date.now();
-    if (msg.provider === 'claude') {
-      // Reconcile before upserting the completion, including when history has
-      // not caught up yet. Finalization must not resurrect the old stream key.
-      const completed = [...slot.serverMessages, ...slot.realtimeMessages.filter(row => row.kind === 'text' && row.role === 'assistant')];
-      msg = reconcileClaudeBlockAliases(completed, [msg], slot._deliveryPositions)[0];
-      if (msg.kind === 'text' && msg.role === 'assistant')
-        slot.realtimeMessages = reconcileClaudeBlockAliases([...slot.serverMessages, msg], slot.realtimeMessages, slot._deliveryPositions);
-    }
-    const position = msg.firstSeq ?? msg.seq;
-    const identity = timelineIdentity(msg);
-    if (position !== undefined) slot._deliveryPositions.set(identity, Math.min(slot._deliveryPositions.get(identity) ?? position, position));
-    const normalizedMessage = { ...msg, sessionId, firstSeq: msg.firstSeq ?? msg.seq };
-    // Providers emit full snapshots for the same item as its output grows.
-    // Replace that row in place; appending it inflates tool groups and can evict
-    // actual conversation history from the bounded realtime cache.
-    const existingIndex = slot.realtimeMessages.findIndex(message =>
-      (normalizedMessage.messageKey ? message.messageKey === normalizedMessage.messageKey
-        : message.id === normalizedMessage.id && message.kind === normalizedMessage.kind)
-      && message.provider === normalizedMessage.provider);
+
+    const incoming: NormalizedMessage = { ...msg, sessionId, firstSeq: msg.firstSeq ?? msg.seq };
+    const identity = timelineIdentity(incoming);
+    const live = slot.realtimeMessages;
+    const existingIndex = live.findIndex((row) => timelineIdentity(row) === identity && row.provider === incoming.provider);
+
     let updated: NormalizedMessage[];
     if (existingIndex >= 0) {
-      updated = [...slot.realtimeMessages];
-      updated[existingIndex] = { ...normalizedMessage, timestamp: updated[existingIndex].timestamp, firstSeq: updated[existingIndex].firstSeq ?? normalizedMessage.firstSeq };
+      const existing = live[existingIndex];
+      // A late partial snapshot must never replace the completed item.
+      if (incoming.kind === 'stream_delta' && existing.kind === 'text' && (existing.content?.length ?? 0) >= (incoming.content?.length ?? 0)) return;
+      updated = [...live];
+      updated[existingIndex] = { ...incoming, timestamp: existing.timestamp, firstSeq: existing.firstSeq ?? incoming.firstSeq };
     } else {
-      updated = [...slot.realtimeMessages, normalizedMessage];
+      const position = incoming.firstSeq;
+      const insertAt = position === undefined
+        ? live.length
+        : (() => {
+          const later = live.findIndex((row) => (row.firstSeq ?? row.seq) !== undefined && (row.firstSeq ?? row.seq)! > position);
+          return later < 0 ? live.length : later;
+        })();
+      updated = [...live.slice(0, insertAt), incoming, ...live.slice(insertAt)];
+      // Inserted among earlier rows: sit where the row it precedes sits.
+      // Appended live: right after whatever the transcript holds newest. A
+      // replayed row is older than the page loaded beside it, so it waits for
+      // `settleReplay` to place it from its persisted neighbours instead.
+      const neighbour = insertAt < live.length ? slot._liveAnchors.get(timelineIdentity(live[insertAt])) : undefined;
+      const newest = slot.serverMessages[slot.serverMessages.length - 1];
+      const anchor: LiveAnchor | undefined = neighbour ?? (newest && !incoming.isReplay ? { after: timelineIdentity(newest) } : undefined);
+      if (anchor) slot._liveAnchors.set(identity, anchor); else slot._liveAnchors.delete(identity);
     }
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = pruneRealtimeSupersededByServer(slot.serverMessages, updated, slot._deliveryPositions);
-    }
+
     slot.realtimeMessages = updated;
+    if (updated.length > MAX_REALTIME_MESSAGES) {
+      reconcileLiveWithServer(slot);
+      if (slot.realtimeMessages.length > MAX_REALTIME_MESSAGES) {
+        const dropped = slot.realtimeMessages.slice(0, slot.realtimeMessages.length - MAX_REALTIME_MESSAGES);
+        for (const row of dropped) slot._liveAnchors.delete(timelineIdentity(row));
+        slot.realtimeMessages = slot.realtimeMessages.slice(-MAX_REALTIME_MESSAGES);
+      }
+    }
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
 
   /**
+   * Places the rows a replay just delivered against the history already loaded.
+   * Called once per replay batch; a batch that lands before any history is
+   * placed by the first page fetch instead.
+   */
+  const settleReplay = useCallback((sessionId: string) => {
+    const slot = storeRef.current.get(sessionId);
+    if (!slot || slot.serverMessages.length === 0 || slot.realtimeMessages.length === 0) return;
+    reconcileLiveWithServer(slot);
+    // Anchors changed even where the row list did not; the merge must rerun.
+    slot._lastRealtimeRef = EMPTY;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+  }, [notify]);
+
+  /**
    * Refreshes only the persisted tail and stitches it onto the contiguous
-   * cached suffix. Large turns request a small offset bridge rather than the
-   * whole transcript, and the final state is applied atomically.
+   * cached suffix; see `refreshLatestSlotFromServer`.
    */
   const refreshLatestFromServer = useCallback(async (
     sessionId: string,
-    opts: {
-      limit?: number;
-      canRequest?: CanRequestHistory;
-    } = {},
+    opts: { limit?: number; canRequest?: CanRequestHistory } = {},
   ) => {
     const slot = getSlot(sessionId);
 
     return enqueueHistoryMutation(slot, async () => {
       try {
-        const result = await refreshLatestSlotFromServer(
-          sessionId,
-          slot,
-          opts.limit ?? SESSION_MESSAGES_PAGE_SIZE,
-          opts.canRequest,
-        );
+        const result = await refreshLatestSlotFromServer(sessionId, slot, opts.limit ?? SESSION_MESSAGES_PAGE_SIZE, opts.canRequest);
         if (result.changed) notify(sessionId);
         return { slot, ...result };
       } catch (error) {
@@ -964,40 +786,14 @@ export function useSessionStore() {
   }, []);
 
   /**
-   * Update or create a streaming message (accumulated text so far).
-   * Uses a well-known ID so subsequent calls replace the same message.
-   */
-  const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: LLMProvider) => {
-    const slot = getSlot(sessionId);
-    const streamId = `__streaming_${sessionId}`;
-    const msg: NormalizedMessage = {
-      id: streamId,
-      sessionId,
-      timestamp: new Date().toISOString(),
-      provider: msgProvider,
-      kind: 'stream_delta',
-      content: accumulatedText,
-    };
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = { ...msg, timestamp: slot.realtimeMessages[idx].timestamp };
-    } else {
-      slot.realtimeMessages = [...slot.realtimeMessages, msg];
-    }
-    recomputeMergedIfNeeded(slot);
-    notify(sessionId);
-  }, [getSlot, notify]);
-
-  /**
-   * Finalize streaming: convert the streaming message to a regular text message.
+   * Finalize streaming: convert every streaming row into a regular text row.
    * Identity and first-delivery position are preserved, including interrupted replies.
    */
   const finalizeStreaming = useCallback((sessionId: string) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
     let changed = false;
-    slot.realtimeMessages = slot.realtimeMessages.map(stream => {
+    slot.realtimeMessages = slot.realtimeMessages.map((stream) => {
       if (stream.kind !== 'stream_delta') return stream;
       changed = true;
       return { ...stream, kind: 'text', role: 'assistant' };
@@ -1024,17 +820,16 @@ export function useSessionStore() {
     fetchMore,
     appendRealtime,
     truncateAt,
+    settleReplay,
     refreshLatestFromServer,
     setActiveSession,
     isStale,
-    updateStreaming,
     finalizeStreaming,
     getMessages,
     getSessionSlot,
   }), [
-    fetchFromServer, fetchMore, appendRealtime, truncateAt, refreshLatestFromServer,
-    setActiveSession, isStale, updateStreaming, finalizeStreaming,
-    getMessages, getSessionSlot,
+    fetchFromServer, fetchMore, appendRealtime, truncateAt, settleReplay, refreshLatestFromServer,
+    setActiveSession, isStale, finalizeStreaming, getMessages, getSessionSlot,
   ]);
 }
 

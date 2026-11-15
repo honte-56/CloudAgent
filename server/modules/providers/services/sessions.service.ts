@@ -525,6 +525,9 @@ export const sessionsService = {
       };
     }
 
+    // Read before the transcript so any live event journaled from here on is
+    // either already in this page or newer than it; never silently between.
+    const realtimeCursor = chatEventsDb.cursor(sessionId);
     const provider = session.provider as LLMProvider;
     const providerSessions = providerRegistry.resolveProvider(provider).sessions;
     const providerSessionId = session.provider_session_id;
@@ -582,7 +585,7 @@ export const sessionsService = {
     return {
       ...result,
       oldestCursor: result.messages[0]?.messageKey || result.messages[0]?.id,
-      realtimeCursor: chatEventsDb.cursor(sessionId),
+      realtimeCursor,
       timelineRevision: chatEventsDb.revision(sessionId),
       messages: result.messages.map((message) => ({
         ...message,

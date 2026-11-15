@@ -128,7 +128,7 @@ flowchart TD
   D -->|chat.edit-send| E2[history_truncated -> rewind or resume at the anchor -> same as chat.send]
   D -->|chat.abort| F[providerRuntimeService.abort + synthetic complete]
   D -->|chat.stop-task| F2[providerRuntimeService.stopBackgroundTask]
-  D -->|chat.subscribe| G[chat_subscribed ack + attach socket + replay events seq > lastSeq]
+  D -->|chat.subscribe| G[chat_subscribed ack + attach socket + replay events seq > lastSeq, or the current turn when the client has no cursor]
   D -->|chat.permission-response| H[providerRuntimeService.resolveToolApproval]
   D -->|other| I[send kind:protocol_error]
 ```
@@ -137,8 +137,31 @@ flowchart TD
 
 1. **Unified envelope**: every server-to-client frame carries a `kind` — either a provider `NormalizedMessage` kind or a gateway kind (`chat_subscribed`, `session_upserted`, `loading_progress`, `protocol_error`). There is no second `type`-based protocol.
 2. **Unified terminal lifecycle**: every provider run ends with exactly one `complete` message built by `createCompleteMessage()` (`server/shared/utils.ts`): `{ kind: "complete", sessionId, actualSessionId, exitCode, success, aborted }`. The chat handler emits a synthetic `complete` for runs that crash or get aborted, and the run registry drops duplicate completes.
-3. **Per-run event log**: every live event gets a monotonically increasing `seq`. `chat.subscribe { sessions: [{ sessionId, lastSeq }] }` re-attaches the live stream to the requesting socket (any provider, not just Claude) and replays events with `seq > lastSeq`. If the buffer no longer covers `lastSeq`, the client refreshes over REST.
+3. **Per-run event log**: every live event gets a monotonically increasing `seq`. `chat.subscribe { sessions: [{ sessionId, lastSeq }] }` re-attaches the live stream to the requesting socket (any provider, not just Claude) and replays events with `seq > lastSeq`. A client with no cursor (`lastSeq: 0`, a fresh page), or a cursor beyond the journal, starts at the registered run's `turnStartSeq`. That includes a recently completed run retained while history catches up; with no registered run it loads history without replaying old turns. A reconnect with a valid cursor still receives every retained event after that cursor, across turn boundaries.
 4. `chat_subscribed` includes `isProcessing` (replaces `check-session-status`) and `pendingPermissions` (replaces `get-pending-permissions`).
+
+The client's session store keeps persisted history in file order and live rows
+separately. Stable provider identities reconcile them; streamed snapshots use
+`firstSeq` to keep their original position. When a live row becomes persisted,
+its persisted identity anchors neighbouring live rows before its echo is retired.
+An established anchor is retained unless a newer neighbour narrows its position.
+Providers without shared user-message identities use one-to-one echo matching;
+an orphaned replay row uses its timestamp only when no persisted neighbour is
+available. A live reply ahead of a partial history snapshot remains visible.
+
+Latest-page refreshes bridge gaps through the history cursor, then replace a
+disjoint window instead of concatenating unrelated ranges. Older-page reads are
+serialized with refreshes. Claude's absorbed `queued_command` inputs become user
+rows, while its synthetic `No response requested.` placeholders are omitted.
+
+Regression coverage lives in `timelineStreaming.test.tsx`,
+`sessionMessagePagination.test.ts`, and the websocket subscription tests. To
+also replay a local capture, set `CLOUDCLI_SESSION_REPLAY_DIR` to a directory
+containing normalized `history.json` (`{ messages: [...] }`) and `events.json`
+(journal rows with JSON-string `payload` fields), then run
+`NODE_ENV=test npm run test:client -- src/modules/chat/tests/recordedSessionTimeline.test.tsx`.
+Captures remain outside the repository; the optional tests assert convergence
+for a live session, a completed-session reload, and a mid-turn reload.
 
 ## `/shell` Terminal Flow
 

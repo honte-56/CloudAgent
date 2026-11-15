@@ -5,6 +5,7 @@ import {
 } from '@/shared/authToken';
 
 import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
+import type { SessionMessagesRequestOptions } from '@/shared/types';
 
 // Headers are a plain record rather than the full `HeadersInit` union so the
 // defaults below can be merged with a caller's headers by spreading.
@@ -241,7 +242,7 @@ async function queueRequest(
  */
 export const sessionMessagesUrl = (
   sessionId: string,
-  { limit = null, offset = 0, before }: { limit?: number | null; offset?: number; before?: string } = {},
+  { limit = null, offset = 0, before }: SessionMessagesRequestOptions = {},
 ): string => {
   const base = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
   return limit === null || limit === undefined
@@ -554,7 +555,7 @@ export const api = {
     }) => post('/api/providers/sessions', payload),
     sessionMessages: (
       sessionId: string,
-      pagination: { limit?: number | null; offset?: number; before?: string } = {},
+      pagination: SessionMessagesRequestOptions = {},
       options: ApiRequestOptions = {},
     ) => get(sessionMessagesUrl(sessionId, pagination), options),
     sessionTokenUsage: (sessionId: string) =>

@@ -178,9 +178,17 @@ export function useChatRealtimeHandlers({
           if (sid) {
             const buffered = replayBuffers.current.get(sid) ?? [];
             replayBuffers.current.delete(sid);
-            for (const event of buffered) handleEvent(event, true);
+            // The journal keeps one snapshot per growing item under the item's
+            // latest sequence, so a reply that started before a tool call is
+            // replayed after it. First delivery is the order the user saw.
+            const deliveryOrder = (event: ServerEvent) => (typeof event.firstSeq === 'number' ? event.firstSeq : event.seq) ?? 0;
+            for (const event of buffered.sort((a, b) => deliveryOrder(a) - deliveryOrder(b))) handleEvent(event, true);
           }
-          if (sid) { flushStreams(sid); if (msg.isProcessing === false) sessionStore.finalizeStreaming(sid); }
+          if (sid) {
+            flushStreams(sid);
+            if (msg.isProcessing === false) sessionStore.finalizeStreaming(sid);
+            sessionStore.settleReplay?.(sid);
+          }
           if (sid && typeof msg.cursor === 'number') lastSeqRef.current.set(sid, Math.max(lastSeqRef.current.get(sid) ?? 0, msg.cursor));
           return;
         }

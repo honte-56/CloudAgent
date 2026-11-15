@@ -611,8 +611,13 @@ function handleChatSubscribe(
 
     // The ack owns current runtime/permission state. Historical control events
     // must not idle a newer turn or reopen an already answered approval.
+    //
+    // A client that knows where it left off (a reconnect) replays from there.
+    // One that does not — a fresh page, or a cursor from a journal that has
+    // since been reset — gets the turn in progress and nothing older: the
+    // persisted transcript it loads over REST already holds the rest.
     const cursor = chatRunRegistry.getCursor(sessionId);
-    const replayAfter = lastSeq > cursor ? 0 : lastSeq;
+    const replayAfter = lastSeq > 0 && lastSeq <= cursor ? lastSeq : chatRunRegistry.getReplayStartSeq(sessionId);
     for (const event of chatRunRegistry.replayEvents(sessionId, replayAfter)) {
       // Older builds incorrectly journaled Codex lifecycle signals as tools.
       if (event.provider === 'codex' && (['subAgentActivity', 'SubAgentActivity'].includes(event.toolName || '')

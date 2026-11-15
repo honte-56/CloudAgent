@@ -722,7 +722,7 @@ export type FetchHistoryOptions = {
 export type FetchHistoryResult = {
   /** Oldest identity in this page; use as the exclusive before cursor. */
   oldestCursor?: string;
-  /** Delivery watermark captured after this history read; not a persistence acknowledgement. */
+  /** Live-event journal cursor captured before this history read; not a persistence acknowledgement. */
   realtimeCursor?: number;
   /** Latest destructive transcript edit, used to discard superseded cached rows. */
   timelineRevision?: number;

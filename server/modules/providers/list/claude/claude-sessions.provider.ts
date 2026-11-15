@@ -1091,6 +1091,9 @@ function createAssistantBlockIndexer() {
   };
 }
 
+/** The text of the placeholder reply Claude writes for a turn that produced none. */
+const SYNTHETIC_NO_RESPONSE = /^\s*No response requested\.?\s*$/;
+
 const readAssistantModel = (value: unknown): string | undefined => {
   const model = readOptionalString(value)?.trim();
   return model && !isPlaceholderProviderModel(model) ? model : undefined;
@@ -1409,6 +1412,29 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
+    // A message typed while the CLI was busy is not written as a `user` turn.
+    // The CLI absorbs it mid-turn and records it as a `queued_command`
+    // attachment whose `source_uuid` is the id the live echo was sent under,
+    // so the row below replaces that echo exactly once history is read.
+    // Without it these messages existed only in the live journal and vanished
+    // from the transcript on reload.
+    if (raw.type === 'attachment' && raw.attachment?.type === 'queued_command' && typeof raw.attachment.prompt === 'string') {
+      const parsedFiles = parseFilesInputTag(raw.attachment.prompt);
+      if ((parsedFiles.text || parsedFiles.attachments.length > 0) && !isInternalContent(parsedFiles.text)) {
+        messages.push(createNormalizedMessage({
+          id: readOptionalString(raw.attachment.source_uuid) ?? baseId,
+          sessionId,
+          timestamp: ts,
+          provider: PROVIDER,
+          kind: 'text',
+          role: 'user',
+          content: parsedFiles.text,
+          files: parsedFiles.attachments.length > 0 ? parsedFiles.attachments : undefined,
+        }));
+      }
+      return messages;
+    }
+
     if (raw.message?.role === 'user' && raw.message?.content && raw.isMeta !== true) {
       if (Array.isArray(raw.message.content)) {
         // Image attachments sent through the SDK are persisted as base64
@@ -1651,6 +1677,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       // no footer to show it in, and a locally-fabricated row (`<synthetic>`,
       // e.g. the usage-limit notice) gets no label rather than a guessed one.
       const answeredByModel = readAssistantModel(raw.message.model);
+      // The CLI fabricates this row when a turn is cut off before the model
+      // answers (an interrupt, a message sent while it was still working). It
+      // tells the reader nothing and drew as an empty-looking reply.
+      const isSyntheticNoResponse = raw.message.model === '<synthetic>'
+        && Array.isArray(raw.message.content)
+        && raw.message.content.every((part: AnyRecord) => part.type === 'text' && SYNTHETIC_NO_RESPONSE.test(String(part.text ?? '')));
+      if (isSyntheticNoResponse) {
+        return messages;
+      }
 
       if (Array.isArray(raw.message.content)) {
         let partIndex = blockOffset;

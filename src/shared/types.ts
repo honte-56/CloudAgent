@@ -2,6 +2,17 @@ import type { TFunction } from 'i18next';
 import type { CSSProperties } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
+//----------------- CHAT HISTORY PAGINATION ------------
+
+/** Selects a bounded history page, preferably by stable cursor; null limit reads the full transcript. */
+export type SessionMessagesRequestOptions = {
+  before?: string;
+  limit?: number | null;
+  offset?: number;
+};
+
+// ---------------------------
+
 //----------------- LLM PROVIDER MODEL CATALOG ------------
 
 /** Identifies which coding-agent CLI backs a session, project selection or model list. */
@@ -511,6 +522,8 @@ export type NormalizedMessage = {
   streamSnapshot?: boolean;
   /** Durable delivery sequence of the first frame, retained while a message grows. */
   firstSeq?: number;
+  /** Set by the gateway on events re-sent after a subscribe; such a row is older than the history page loaded alongside it, not newer. */
+  isReplay?: boolean;
 
   id: string;
   /**

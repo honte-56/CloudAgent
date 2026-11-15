@@ -132,15 +132,16 @@ test('persisted anchors survive pruning, so an old unpersisted error stays befor
  expect(view.result.current.getMessages('one').at(-1)?.id).toBe('new-error');
 });
 
-test('old replay rows outside the loaded window wait for upward paging instead of appearing below the final reply',async()=>{
+test('replayed rows older than the loaded page sit above it and fold into the older page once it loads',async()=>{
  const {view,send}=harness();
  act(()=>{send({...row('old-error',''),kind:'tool_use',toolId:'old-error',toolName:'Bash',seq:1});send({...row('recent','recent'),seq:90});send({...row('final','finished'),seq:100});});
  vi.mocked(api.providers.sessionMessages).mockResolvedValue({ok:true,json:async()=>({data:{messages:[row('recent','recent'),row('final','finished')],total:3,hasMore:true,oldestCursor:'recent'}})} as Response);
  await act(async()=>{await view.result.current.fetchFromServer('one');});
- expect(view.result.current.getMessages('one').map(message=>message.id)).toEqual(['recent','final']);
+ expect(view.result.current.getMessages('one').map(message=>message.id)).toEqual(['old-error','recent','final']);
  vi.mocked(api.providers.sessionMessages).mockResolvedValue({ok:true,json:async()=>({data:{messages:[{...row('old-error',''),kind:'tool_use',toolId:'old-error',toolName:'Bash'}],total:3,hasMore:false,oldestCursor:'old-error'}})} as Response);
  await act(async()=>{await view.result.current.fetchMore('one');});
  expect(view.result.current.getMessages('one').map(message=>message.id)).toEqual(['old-error','recent','final']);
+ expect(view.result.current.getSessionSlot('one')?.realtimeMessages).toHaveLength(0);
 });
 
 test('reconnect frames are applied atomically at the replay boundary',()=>{
@@ -190,14 +191,75 @@ for (const provider of ['codex','claude'] as const) test(`${provider} first stre
  expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['previous','question','answer']);
 });
 
-test('an older replay stays before a later unsequenced user prompt instead of being forced to the tail',async()=>{
+test('a provider\'s echo of a message typed mid-run is retired by its persisted copy, whatever id the transcript gives it',async()=>{
  const {view,send}=harness();
- const previous={...row('previous','Previous'),timestamp:'2026-11-05T09:40:00Z'};
- const question={...row('question','Later question'),role:'user' as const,timestamp:'2026-11-05T09:43:32Z'};
- act(()=>send({...previous,seq:10}));
- vi.mocked(api.providers.sessionMessages).mockResolvedValue({ok:true,json:async()=>({data:{messages:[previous,question],total:2,hasMore:false}})} as Response);
+ act(()=>send({...row('echo-id','also rename the title'),provider:'claude',role:'user',messageKey:undefined,seq:5,timestamp:'2026-11-15T05:38:56Z'}));
+ expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['echo-id']);
+ vi.mocked(api.providers.sessionMessages).mockResolvedValue({ok:true,json:async()=>({data:{messages:[
+  {...row('q','start the work'),provider:'claude',role:'user',messageKey:undefined,timestamp:'2026-11-15T05:37:00Z'},
+  {...row('transcript-id','also rename the title'),provider:'claude',role:'user',messageKey:undefined,timestamp:'2026-11-15T05:39:23Z'},
+ ],total:2,hasMore:false}})} as Response);
  await act(async()=>{await view.result.current.fetchFromServer('one');});
- act(()=>send({...row('old-pending','Earlier answer','stream_delta'),seq:12,timestamp:'2026-11-05T09:41:00Z'}));
- act(()=>vi.advanceTimersByTime(100));
- expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['previous','old-pending','question']);
+ expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['q','transcript-id']);
+});
+
+test('a replayed turn longer than the loaded page is placed above the page, not under it',async()=>{
+ const {view,send}=harness();
+ vi.mocked(api.providers.sessionMessages).mockResolvedValue({ok:true,json:async()=>({data:{messages:[row('c','third'),row('d','fourth')],total:4,hasMore:true,oldestCursor:'c'}})} as Response);
+ await act(async()=>{await view.result.current.fetchFromServer('one');});
+ act(()=>{
+  send({...row('a','first'),seq:1,isReplay:true} as NormalizedMessage);
+  send({...row('b','second'),seq:2,isReplay:true} as NormalizedMessage);
+  send({...row('c','third'),seq:3,isReplay:true} as NormalizedMessage);
+  send({...row('d','fourth'),seq:4,isReplay:true} as NormalizedMessage);
+  send({kind:'chat_replay_complete',sessionId:'one',cursor:4,isProcessing:false} as unknown as NormalizedMessage);
+ });
+ expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['a','b','c','d']);
+ act(()=>send({...row('e','fifth'),seq:5}));
+ expect(view.result.current.getMessages('one').map(m=>m.id)).toEqual(['a','b','c','d','e']);
+});
+
+test('persisting an optimistic prompt keeps its streaming reply after that prompt', async () => {
+  const { view, send } = harness();
+  const previous = row('previous', 'Previous reply');
+  const prompt = { ...row('persisted-prompt', 'Next question'), messageKey: undefined, role: 'user' as const };
+  vi.mocked(api.providers.sessionMessages).mockResolvedValue({ ok: true, json: async () => ({ data: { messages: [previous], total: 1, hasMore: false } }) } as Response);
+  await act(async () => { await view.result.current.fetchFromServer('one'); });
+  act(() => {
+    view.result.current.appendRealtime('one', { ...prompt, id: 'local_prompt' });
+    send({ ...row('answer', 'Working on it', 'stream_delta'), seq: 2, streamSnapshot: true });
+    vi.advanceTimersByTime(60);
+  });
+  vi.mocked(api.providers.sessionMessages).mockResolvedValue({ ok: true, json: async () => ({ data: { messages: [previous, prompt], total: 2, hasMore: false } }) } as Response);
+  await act(async () => { await view.result.current.refreshLatestFromServer('one'); });
+  expect(view.result.current.getMessages('one').map(message => message.id)).toEqual(['previous', 'persisted-prompt', 'answer']);
+});
+
+test('a compacted replay snapshot stays before tools that followed its first fragment', () => {
+  const { view, send } = harness();
+  act(() => {
+    send({ ...row('tool', ''), kind: 'tool_use', toolId: 'tool', toolName: 'Bash', seq: 2, isReplay: true });
+    send({ ...row('reply', 'Complete reply', 'stream_delta'), seq: 3, firstSeq: 1, streamSnapshot: true, isReplay: true });
+    send({ kind: 'chat_replay_complete', sessionId: 'one', cursor: 3, isProcessing: false } as unknown as NormalizedMessage);
+  });
+  expect(view.result.current.getMessages('one').map(message => message.id)).toEqual(['reply', 'tool']);
+  expect(view.result.current.getMessages('one')[0].kind).toBe('text');
+});
+
+test('a late snapshot of an earlier item cannot loosen an established replay anchor', async () => {
+  const { view, send } = harness();
+  const persisted = [row('a', 'First'), row('b', 'Second'), row('c', 'Third')];
+  vi.mocked(api.providers.sessionMessages).mockResolvedValue({ ok: true, json: async () => ({ data: { messages: persisted, total: 3, hasMore: false } }) } as Response);
+  await act(async () => { await view.result.current.fetchFromServer('one'); });
+  act(() => {
+    send({ ...row('pending', 'Pending tool'), kind: 'tool_use', toolId: 'pending', toolName: 'Bash', seq: 3, isReplay: true });
+    send({ ...persisted[2], seq: 4, isReplay: true });
+    send({ kind: 'chat_replay_complete', sessionId: 'one', cursor: 4, isProcessing: true } as unknown as NormalizedMessage);
+  });
+  expect(view.result.current.getMessages('one').map(message => message.id)).toEqual(['a', 'b', 'pending', 'c']);
+  act(() => {
+    send({ ...persisted[0], seq: 5, firstSeq: 1, isReplay: true });
+    send({ kind: 'chat_replay_complete', sessionId: 'one', cursor: 5, isProcessing: true } as unknown as NormalizedMessage);
+  });
+  expect(view.result.current.getMessages('one').map(message => message.id)).toEqual(['a', 'b', 'pending', 'c']);
 });

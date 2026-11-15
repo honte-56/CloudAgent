@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import type { NormalizedMessage } from '@/shared/types';
-import { removeOptimisticUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
+import { matchPersistedUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
+
+// Assert the visible remainder as well as the store's matching contract.
+function removeOptimisticUserEchoes(server: NormalizedMessage[], live: NormalizedMessage[]) {
+  const matches = matchPersistedUserEchoes(server, live);
+  return live.filter(message => !matches.has(message));
+}
 
 const createUserMessage = (
   id: string,

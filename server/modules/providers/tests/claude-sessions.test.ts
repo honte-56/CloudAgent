@@ -2364,3 +2364,56 @@ test('extractFirstValidJsonlData closes the file stream on the no-match path', {
     await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+/**
+ * A message typed while the CLI was busy is absorbed mid-turn: the transcript
+ * holds it as a `queued_command` attachment rather than a `user` turn, under the
+ * id the live echo was sent with.
+ */
+async function writeMidTurnTranscript(projectDirectory: string, sessionId: string): Promise<string> {
+  const transcriptPath = path.join(projectDirectory, `${sessionId}.jsonl`);
+  const lines = [
+    { type: 'user', uuid: 'u1', parentUuid: null, sessionId, timestamp: '2026-11-15T05:37:00.000Z', message: { role: 'user', content: 'start the work' } },
+    { type: 'assistant', uuid: 'a1', parentUuid: 'u1', sessionId, timestamp: '2026-11-15T05:37:05.000Z', message: { id: 'msg_1', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Working on it.' }] } },
+    { type: 'queue-operation', operation: 'enqueue', sessionId, timestamp: '2026-11-15T05:38:56.000Z', content: 'also rename the title' },
+    { type: 'queue-operation', operation: 'remove', sessionId, timestamp: '2026-11-15T05:39:23.000Z', content: 'also rename the title', reason: 'absorbed_mid_turn', commandUuid: 'live-echo-1' },
+    { type: 'attachment', uuid: 'att-1', parentUuid: 'a1', sessionId, timestamp: '2026-11-15T05:38:56.000Z', attachment: { type: 'queued_command', prompt: 'also rename the title', source_uuid: 'live-echo-1', commandMode: 'prompt' } },
+    { type: 'assistant', uuid: 'a2', parentUuid: 'att-1', sessionId, timestamp: '2026-11-15T05:39:30.000Z', message: { id: 'msg_2', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Renamed.' }] } },
+    { type: 'assistant', uuid: 'a3', parentUuid: 'a2', sessionId, timestamp: '2026-11-15T05:40:00.000Z', message: { id: 'synthetic-1', role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } },
+  ];
+  await writeFile(transcriptPath, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+  return transcriptPath;
+}
+
+test('Claude history shows a message absorbed mid-turn as the user turn it was, under its live id', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'claude-mid-turn-'));
+  const sessionId = 'mid-turn-session';
+
+  try {
+    const transcriptPath = await writeMidTurnTranscript(tempRoot, sessionId);
+
+    await withIsolatedDatabase(async () => {
+      const now = new Date().toISOString();
+      sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Mid-turn session', now, now, transcriptPath);
+
+      const history = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => null }).fetchHistory(sessionId, { providerSessionId: sessionId });
+
+      assert.deepEqual(
+        history.messages.map((message) => [message.role, message.content]),
+        [
+          ['user', 'start the work'],
+          ['assistant', 'Working on it.'],
+          ['user', 'also rename the title'],
+          ['assistant', 'Renamed.'],
+        ],
+      );
+      // The same id the live echo was sent under, so the client retires that
+      // echo by identity instead of showing the message twice.
+      assert.equal(history.messages[2].id, 'live-echo-1');
+      // The CLI's "No response requested." placeholder is not a reply.
+      assert.equal(history.messages.some((message) => /No response requested/.test(message.content ?? '')), false);
+    });
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});

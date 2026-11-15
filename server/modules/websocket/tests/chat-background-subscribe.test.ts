@@ -197,3 +197,37 @@ test('reconnect filters malformed legacy subagent tool frames while retaining re
   assert(tab.frames.some(frame=>frame.toolId==='real-command'&&frame.isError===true));
  });
 });
+
+test('fresh subscriptions replay only the newest turn while reconnects keep their delivery cursor', async () => {
+  await withIsolatedDatabase(async () => {
+    const first = chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'claude', providerSessionId: null, connection: null, userId: 1 })!;
+    first.writer.send({ kind: 'text', id: 'old-reply', provider: 'claude', content: 'Previous turn' });
+    first.writer.send({ kind: 'text', id: 'old-tail', provider: 'claude', content: 'Previous turn finished' });
+    first.writer.sendComplete({ exitCode: 0 });
+    const next = chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'claude', providerSessionId: null, connection: null, userId: 1 })!;
+    next.writer.send({ kind: 'text', id: 'new-reply', provider: 'claude', content: 'Current turn' });
+
+    for (const lastSeq of [0, 1, 999]) {
+      const tab = createFakeSocket();
+      handleChatConnection(tab as never, { user: { id: 1 } } as never, {
+        runtime: { hasBackgroundWork: () => false, getPendingApprovalsForSession: () => [] } as never,
+      });
+      tab.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID, lastSeq }] }));
+      await settle();
+      assert.deepEqual(tab.frames.filter(frame => frame.isReplay).map(frame => frame.id), lastSeq === 1 ? ['old-tail', 'new-reply'] : ['new-reply']);
+      assert.equal(tab.frames[0].resetCursor, lastSeq === 999);
+      assert.equal(tab.frames.at(-1)?.kind, 'chat_replay_complete');
+    }
+
+    // A disconnected client with an earlier cursor must still receive rows
+    // from previous turns that it has not seen, even after run eviction.
+    chatRunRegistry.clearAll();
+    const tab = createFakeSocket();
+    handleChatConnection(tab as never, { user: { id: 1 } } as never, {
+      runtime: { hasBackgroundWork: () => false, getPendingApprovalsForSession: () => [] } as never,
+    });
+    tab.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID, lastSeq: 1 }] }));
+    await settle();
+    assert.deepEqual(tab.frames.filter(frame => frame.isReplay).map(frame => frame.id), ['old-tail', 'new-reply']);
+  });
+});

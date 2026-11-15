@@ -6,11 +6,8 @@ import type { NormalizedMessage } from '@/shared/types';
 import {
   buildSessionMessagesUrl,
   findLatestPageOverlapLength,
-  hasReachedCachedTailTimeBoundary,
   mergeLatestServerPage,
   mergeOlderServerPage,
-  planLatestPageBridge,
-  resolveLatestPagePagination,
 } from '@/modules/chat/utils/sessionMessagePagination';
 
 function message(
@@ -74,57 +71,6 @@ test('Codex rows with regenerated IDs overlap by stable transcript fields', () =
   );
 });
 
-test('large appended turns request only the missing bridge and one anchor', () => {
-  const cached = range(81, 100);
-  const latest = range(106, 125);
-
-  assert.deepEqual(planLatestPageBridge(cached, latest, 100, 125), {
-    offset: 20,
-    limit: 6,
-  });
-
-  const bridge = range(100, 105);
-  const merged = mergeLatestServerPage(cached, [...bridge, ...latest]);
-  assert.equal(merged.overlapLength, 1);
-  assert.deepEqual(merged.messages.map((item) => item.id), range(81, 125).map((item) => item.id));
-});
-
-test('tool-result totals walk bounded bridge chunks until a contiguous anchor', () => {
-  const cached = range(81, 100);
-  const latest = range(106, 125);
-
-  // Claude reports only 15 renderable additions for a 25-row normalized turn.
-  assert.deepEqual(planLatestPageBridge(cached, latest, 100, 115), {
-    offset: 20,
-    limit: 1,
-  });
-  assert.deepEqual(planLatestPageBridge(cached, latest, 100, 115, 1), {
-    offset: 21,
-    limit: 20,
-  });
-  assert.deepEqual(planLatestPageBridge(cached, latest, 100, 115, 21), {
-    offset: 41,
-    limit: 20,
-  });
-
-  const firstBridgeChunk = range(105, 105);
-  const secondBridgeChunk = range(85, 104);
-  const merged = mergeLatestServerPage(
-    cached,
-    [...secondBridgeChunk, ...firstBridgeChunk, ...latest],
-  );
-
-  assert.equal(merged.overlapLength, 16);
-  assert.deepEqual(merged.messages.map((item) => item.id), range(81, 125).map((item) => item.id));
-});
-
-test('bridge discovery stops after crossing the cached tail time boundary', () => {
-  const cached = range(81, 100);
-
-  assert.equal(hasReachedCachedTailTimeBoundary(cached, range(101, 120)), false);
-  assert.equal(hasReachedCachedTailTimeBoundary(cached, range(95, 114)), true);
-});
-
 test('older-page reconciliation removes overlap caused by tail growth', () => {
   const cached = range(81, 100);
   const shiftedOlderPage = range(66, 85);
@@ -146,6 +92,20 @@ test('normal non-overlapping older pages prepend unchanged', () => {
   assert.deepEqual(result.messages.map((item) => item.id), range(61, 100).map((item) => item.id));
 });
 
+test('native message keys preserve overlap when a provider enriches the row', () => {
+  const cached = [message(1, { messageKey: 'block:1' })];
+  const updated = message(2, { messageKey: 'block:1', content: 'Completed reply' });
+  const result = mergeLatestServerPage(cached, [updated]);
+  assert.equal(result.overlapLength, 1);
+  assert.deepEqual(result.messages, [updated]);
+});
+
+test('distinct native blocks with identical text and timestamps do not overlap', () => {
+  const first = message(1, { messageKey: 'block:1' });
+  const second = { ...first, id: 'second', messageKey: 'block:2' };
+  assert.equal(findLatestPageOverlapLength([first], [second]), 0);
+});
+
 test('a disjoint fetched window is never concatenated onto cached history', () => {
   const cached = range(1, 20);
   const disjoint = range(30, 49);
@@ -153,27 +113,4 @@ test('a disjoint fetched window is never concatenated onto cached history', () =
 
   assert.equal(merged.overlapLength, 0);
   assert.equal(merged.messages, cached);
-});
-
-test('pagination preserves partial and fully-loaded oldest-page boundaries', () => {
-  assert.deepEqual(resolveLatestPagePagination(20, 30, true, true), {
-    offset: 30,
-    hasMore: true,
-  });
-  assert.deepEqual(resolveLatestPagePagination(40, 50, false, true), {
-    offset: 50,
-    hasMore: false,
-  });
-  assert.deepEqual(resolveLatestPagePagination(0, 20, false, true), {
-    offset: 20,
-    hasMore: true,
-  });
-});
-
-test('offset counts loaded persisted rows even when renderable total excludes tool results', () => {
-  const pagination = resolveLatestPagePagination(20, 23, true, true);
-  const renderableTotal = 21;
-
-  assert.equal(pagination.offset, 23);
-  assert.ok(pagination.offset > renderableTotal);
 });

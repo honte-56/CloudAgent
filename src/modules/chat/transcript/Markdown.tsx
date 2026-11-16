@@ -302,7 +302,8 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
         // Prefer the href when it is a real path; otherwise fall back to the
         // link text, since models often emit `[src/foo.ts]()` with an empty href.
         const linkText = childrenToText(linkChildren);
-        const fileRef = looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined;
+        const fileHref = looksLikeFilePath(href) ? href : undefined;
+        const fileRef = fileHref ?? (looksLikeFilePath(linkText) ? linkText : undefined);
 
         if (fileRef && !isExternalHref(href)) {
           return (
@@ -316,11 +317,22 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
                 // trailing space (``[`src/foo.ts:12` ]()``), and that space
                 // defeats the `$`-anchored suffix strip.
                 const reference = fileRef.trim();
-                if (reference.endsWith('/')) {
-                  openDirectory(reference);
+                let filePath = stripLineSuffix(reference);
+                if (fileHref) {
+                  // Markdown hrefs are URL-encoded; the editor needs a filesystem
+                  // path. Decode once, after removing navigation suffixes, and
+                  // leave literal paths from link text untouched.
+                  try {
+                    filePath = decodeURIComponent(filePath);
+                  } catch {
+                    // Preserve malformed percent sequences instead of failing the click.
+                  }
+                }
+                if (filePath.endsWith('/')) {
+                  openDirectory(filePath);
                   return;
                 }
-                openFileInEditor(stripLineSuffix(reference), lineFromRef(reference));
+                openFileInEditor(filePath, lineFromRef(reference));
               }}
             >
               {linkChildren}

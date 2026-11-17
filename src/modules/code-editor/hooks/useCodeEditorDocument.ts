@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, readApiJson } from '@/shared/api';
-import type { CodeEditorFile } from '@/shared/types';
+import type { CodeEditorFile, Project } from '@/shared/types';
 import { isBinaryFile } from '@/modules/code-editor/utils/binaryFile';
 import { getPreviewKind } from '@/modules/code-editor/utils/previewableFile';
 
@@ -22,6 +22,18 @@ const getErrorMessage = (error: unknown) => {
 // so a CRLF file would look edited from the first keystroke (and stay "edited"
 // after an undo) unless both sides of the comparison are normalised.
 const normalizeLineEndings = (text: string) => text.replace(/\r\n?/g, '\n');
+
+// Transcript links can name a file in a different registered project. Resolve
+// only absolute paths and prefer the deepest root; a sibling sharing the same
+// prefix is not an owner. The backend still validates every retried write.
+function findFileProject(projects: Project[], filePath: string): string | undefined {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  if (!/^(\/|[A-Za-z]:\/)/.test(normalizedPath)) return undefined;
+  return projects
+    .map(project => ({ id: project.projectId, root: (project.fullPath || project.path || '').replace(/\\/g, '/').replace(/\/+$/, '') }))
+    .filter(project => project.id && project.root && normalizedPath.startsWith(`${project.root}/`))
+    .sort((left, right) => right.root.length - left.root.length)[0]?.id;
+}
 
 export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocumentParams) => {
   const [content, setContent] = useState('');
@@ -146,7 +158,22 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectId, filePath, content);
+      let response = await api.saveFile(fileProjectId, filePath, content);
+
+      // Reading a workspace-wide reference succeeds under the conversation's
+      // project, while writes are project-scoped. Retry this specific mismatch
+      // with the registered owner, retaining the exact pending buffer and path.
+      if (response.status === 403) {
+        const errorData = await response.clone().json().catch(() => null);
+        if (errorData?.error === 'Path must be under project root') {
+          const projects = await readApiJson<Project[]>(await api.projects());
+          if (isStaleSave()) return;
+          const ownerProjectId = Array.isArray(projects) ? findFileProject(projects, filePath) : undefined;
+          if (ownerProjectId && ownerProjectId !== fileProjectId) {
+            response = await api.saveFile(ownerProjectId, filePath, content);
+          }
+        }
+      }
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');

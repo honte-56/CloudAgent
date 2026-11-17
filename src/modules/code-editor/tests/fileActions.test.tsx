@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
 
+import { i18n } from '@/modules/i18n';
+
 const mock = vi.hoisted(() => ({ read: vi.fn(), blob: vi.fn(), stat: vi.fn(), save: vi.fn(), copy: vi.fn(), urls: vi.fn() }));
 vi.mock('@/shared/api', () => ({ api: { readFile: mock.read, readFileBlob: mock.blob, statFiles: mock.stat, saveFile: mock.save }, readApiJson: async (response: Response) => {
   if (!response.ok) throw new Error('File not found');
@@ -14,7 +16,8 @@ const { default: CodeEditor } = await import('@/modules/code-editor/CodeEditor')
 const { FileViewerRoute } = await import('@/modules/code-editor/FileViewerRoute');
 const file = { name: '资料 #1.zip', path: '/repo/资料 #1.zip', projectId: 'p1' };
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en');
   mock.read.mockReset().mockResolvedValue(json({ content: '<h1>Report</h1>' }));
   mock.stat.mockReset().mockResolvedValue(json({ files: [{ exists: true, size: 5432100 }] }));
   mock.blob.mockReset().mockImplementation(async () => new Response(new Uint8Array([80,75,3,4,0,255,128]), { headers: { 'Content-Type': 'application/zip' } }));
@@ -77,7 +80,7 @@ test('HTML eye switches in place and back without dropping edits, with sandboxed
   const previewDocument = document.implementation.createHTMLDocument();
   const popup = { opener: window, document: previewDocument };
   vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Open preview in new tab' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Open in new tab' }));
   expect(previewDocument.querySelector('iframe')?.getAttribute('srcdoc')).toBe('<h1>Edited</h1>');
   expect(popup.opener).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Edit source' }));
@@ -130,4 +133,68 @@ test('switching files cancels old downloads before they can save under the wrong
   expect(signal.aborted).toBe(true);
   await act(async () => resolve(new Response('old bytes')));
   expect(mock.urls).not.toHaveBeenCalled();
+});
+
+test('CSV opens as an editable table, preserves formatting and shares source edits and save shortcuts', async () => {
+  const original = '\uFEFFword,status,evidence\r\n贝拉,active,"[{""source"":""a,b""}]"\r\n';
+  mock.read.mockResolvedValue(json({ content: original }));
+  mock.save.mockImplementation(async () => json({ success: true }));
+  open('review.CSV');
+  const status = await screen.findByRole('textbox', { name: 'Row 2, column 2' });
+  expect((screen.getByRole('textbox', { name: 'Row 2, column 3' }) as HTMLTextAreaElement).value).toBe('[{"source":"a,b"}]');
+  expect(screen.queryByRole('img', { name: 'Unsaved changes' })).toBeNull();
+  fireEvent.change(status, { target: { value: 'pending' } });
+  expect(screen.getByRole('img', { name: 'Unsaved changes' })).toBeTruthy();
+  fireEvent.keyDown(status, { key: 's', ctrlKey: true });
+  await waitFor(() => expect(mock.save).toHaveBeenCalledWith('p1', '/repo/review.CSV', original.replace('active', 'pending')));
+  await waitFor(() => expect(screen.queryByRole('img', { name: 'Unsaved changes' })).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit source' }));
+  const source = screen.getByRole('textbox', { name: 'Source' });
+  expect((source as HTMLTextAreaElement).value).toContain('pending');
+  fireEvent.change(source, { target: { value: 'word,status\n嘉然,removed\n' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+  expect((screen.getByRole('textbox', { name: 'Row 2, column 2' }) as HTMLTextAreaElement).value).toBe('removed');
+  expect(mock.read).toHaveBeenCalledTimes(1);
+});
+
+test('CSV pagination edits the correct record and supports headerless and ragged records', async () => {
+  const original = 'name,status\n' + Array.from({ length: 205 }, (_, i) => `row${i},active`).join('\n') + '\nshort';
+  mock.read.mockResolvedValue(json({ content: original }));
+  mock.save.mockImplementation(async () => json({ success: true }));
+  open('large.csv');
+  await screen.findByRole('table', { name: 'CSV table' });
+  expect(screen.queryByRole('textbox', { name: 'Row 102, column 2' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Row 102, column 2' }), { target: { value: 'pending' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(mock.save).toHaveBeenCalledWith('p1', '/repo/large.csv', original.replace('row100,active', 'row100,pending')));
+  fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+  expect(screen.getByLabelText('No field in this row')).toBeTruthy();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'First row is header' }));
+  expect(screen.getByRole('columnheader', { name: 'Column 1' })).toBeTruthy();
+  expect((screen.getByRole('textbox', { name: 'Row 1, column 1' }) as HTMLTextAreaElement).value).toBe('name');
+});
+
+test('malformed CSV offers source repair and never silently rewrites the document', async () => {
+  mock.read.mockResolvedValue(json({ content: 'name,status\n"broken,active' }));
+  open('broken.csv');
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.queryByRole('table')).toBeNull();
+  expect(screen.queryByRole('img', { name: 'Unsaved changes' })).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Edit source' })[0]);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Source' }), { target: { value: 'name,status\n"fixed",active' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+  expect((screen.getByRole('textbox', { name: 'Row 2, column 1' }) as HTMLTextAreaElement).value).toBe('fixed');
+});
+
+test('empty CSV can be edited and CSV diff references retain their source view', async () => {
+  mock.read.mockResolvedValue(json({ content: '' }));
+  const view = open('empty.csv');
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Row 1, column 1' }), { target: { value: 'name' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Edit source' }));
+  expect((screen.getByRole('textbox', { name: 'Source' }) as HTMLTextAreaElement).value).toBe('name');
+  view.unmount();
+  render(<CodeEditor file={{ name: 'diff.csv', path: '/repo/diff.csv', projectId: 'p1', diffInfo: { old_string: 'a,b', new_string: 'a,c' } }} onClose={() => {}} />);
+  expect(await screen.findByRole('textbox', { name: 'Source' })).toBeTruthy();
+  expect(screen.queryByRole('table')).toBeNull();
 });

@@ -54,5 +54,18 @@
   "unsavedChanges": {
     "confirmClose": "You have unsaved changes. Close this file and discard them?",
     "indicator": "Unsaved changes"
+  },
+  "csv": {
+    "title": "CSV table",
+    "firstRowHeader": "First row is header",
+    "cell": "Row {{row}}, column {{column}}",
+    "column": "Column {{column}}",
+    "missingCell": "No field in this row",
+    "editHint": "Edit cells directly, then save. Use source view to add or remove rows and columns.",
+    "parseError": "Invalid CSV quoting in record {{row}}. Fix it in source view to edit the table.",
+    "dimensions": "{{rows}} data rows · {{columns}} columns",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "page": "{{page}} / {{pages}}"
   }
 }

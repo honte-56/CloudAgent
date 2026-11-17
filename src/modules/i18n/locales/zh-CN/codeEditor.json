@@ -54,5 +54,18 @@
   "unsavedChanges": {
     "confirmClose": "您有未保存的更改。关闭此文件并放弃这些更改？",
     "indicator": "未保存的更改"
+  },
+  "csv": {
+    "title": "CSV 表格",
+    "firstRowHeader": "首行为表头",
+    "cell": "第 {{row}} 行，第 {{column}} 列",
+    "column": "第 {{column}} 列",
+    "missingCell": "此行没有该字段",
+    "editHint": "直接编辑单元格后保存。添加或删除行、列请切换到源码。",
+    "parseError": "第 {{row}} 条记录的 CSV 引号格式有误，请切换到源码修正后再编辑表格。",
+    "dimensions": "{{rows}} 行数据 · {{columns}} 列",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "page": "{{page}} / {{pages}}"
   }
 }

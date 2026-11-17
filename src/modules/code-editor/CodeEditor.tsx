@@ -19,6 +19,7 @@ import { useFileActions } from '@/modules/code-editor/hooks/useFileActions';
 import CodeEditorSurface from '@/modules/code-editor/CodeEditorSurface';
 import CodeEditorBinaryFile from '@/modules/code-editor/CodeEditorBinaryFile';
 import CodeEditorMediaPreview from '@/modules/code-editor/CodeEditorMediaPreview';
+import { CsvEditor } from '@/modules/code-editor/CsvEditor';
 
 type CodeEditorProps = {
   file: CodeEditorFile;
@@ -54,9 +55,12 @@ export default function CodeEditor({
   const paletteOps = usePaletteOps();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
-  // One preview toggle serves HTML and Markdown without changing the text buffer.
-  const [markdownPreview, setMarkdownPreview] = useState(initialPreview);
-  useEffect(() => setMarkdownPreview(initialPreview), [file.path, initialPreview]);
+  const isCsvFile = file.name.toLowerCase().endsWith('.csv');
+  // CSV opens as a table; diff and line references still open at their source.
+  const defaultPreview = initialPreview || (isCsvFile && !file.diffInfo && !file.line);
+  // Preview and source editing share the same buffer, including pending edits.
+  const [markdownPreview, setMarkdownPreview] = useState(defaultPreview);
+  useEffect(() => setMarkdownPreview(defaultPreview), [file.path, defaultPreview]);
 
   // The code editor follows the app-wide theme; it has no theme of its own.
   const { isDarkMode } = useTheme();
@@ -258,7 +262,7 @@ export default function CodeEditor({
             isFullscreen={isFullscreen}
             projectId={fileProjectId}
             canEdit={!isBinary && !previewKind && !loadError}
-            canPreview={(isMarkdownFile || isHtmlPreviewFile) && !loadError}
+            canPreview={(isMarkdownFile || isHtmlPreviewFile || isCsvFile) && !loadError}
             preview={markdownPreview}
             loading={loading}
             saving={saving}
@@ -287,6 +291,15 @@ export default function CodeEditor({
                 labels={{ loading: t('filePreview.loading', 'Loading preview...'), error: t('filePreview.error', 'Unable to display this file.'),
                   openInNewTab: t('filePreview.openInNewTab', 'Open in new tab'), fullscreen: t('actions.fullscreen'), exitFullscreen: t('actions.exitFullscreen'), close: t('actions.close') }} />
               : isBinary ? <CodeEditorBinaryFile file={file} size={metadata?.size} downloading={downloading} onDownload={download} />
+              : isCsvFile && markdownPreview ? <CsvEditor
+                key={`${fileProjectId}:${file.path}`}
+                content={content}
+                onChange={setContent}
+                onEditSource={() => setMarkdownPreview(false)}
+                isExpanded={isExpanded}
+                onToggleExpand={isSidebar ? onToggleExpand : null}
+                onPopOut={isSidebar ? onPopOut : null}
+              />
               : isHtmlPreviewFile && markdownPreview ? <iframe title={file.name} srcDoc={content}
                 sandbox="allow-forms allow-modals allow-popups allow-scripts" className="h-full w-full border-0 bg-white" />
               : <CodeEditorSurface

@@ -36,5 +36,18 @@
   "unsavedChanges": {
     "confirmClose": "您有未儲存的變更。關閉此檔案並放棄這些變更？",
     "indicator": "未儲存的變更"
+  },
+  "csv": {
+    "title": "CSV 表格",
+    "firstRowHeader": "首列為標題",
+    "cell": "第 {{row}} 列，第 {{column}} 欄",
+    "column": "第 {{column}} 欄",
+    "missingCell": "此列沒有該欄位",
+    "editHint": "直接編輯儲存格後儲存。新增或刪除列、欄請切換至原始碼。",
+    "parseError": "第 {{row}} 筆記錄的 CSV 引號格式有誤，請切換至原始碼修正後再編輯表格。",
+    "dimensions": "{{rows}} 列資料 · {{columns}} 欄",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "page": "{{page}} / {{pages}}"
   }
 }

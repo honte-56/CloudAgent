@@ -5,10 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
-import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
 import { queryClaudeSDK } from '@/modules/providers/list/claude/claude-runtime.provider.js';
 import { createProviderTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
 import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
+
+const CLAUDE_TEST_MODELS = { OPTIONS: [{ value: 'default', label: 'Default' }], DEFAULT: 'default' };
 
 /**
  * The context-window total comes from the window the SDK reports for the model
@@ -33,7 +34,7 @@ async function runScripted(
   const context: ProviderRuntimeContext = {
     resolveProviderSessionId: () => resumeProviderSessionId,
     resolveResumeModel: async () => undefined,
-    getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+    getProviderModels: async () => CLAUDE_TEST_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
     createQuery: ({ prompt }) => {

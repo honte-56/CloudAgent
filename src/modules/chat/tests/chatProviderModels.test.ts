@@ -93,7 +93,7 @@ test('a provider with no stored model falls back to its own default, not another
 test('choosing a model persists it under that provider’s key only', async () => {
   const { result } = await renderProviderState();
   await waitFor(() => {
-    assert.ok(result.current.providerModels.codex);
+    assert.equal(result.current.providerModelsLoading, false);
   });
   const claudeBefore = result.current.providerModels.claude;
 

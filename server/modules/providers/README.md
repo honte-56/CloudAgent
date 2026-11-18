@@ -401,3 +401,22 @@ behavior; callers that intend to preserve background work must use steering.
 
 Focused real-CLI verification (local fake API, no external inference):
 `CLOUDCLI_TEST_CLAUDE_LIVE=1 npx tsx --tsconfig server/tsconfig.json --test server/modules/providers/tests/claude-live-input.integration.test.ts`.
+
+### Native Codex and Claude model catalogs
+
+Codex model choices come from the configured chat CLI's `app-server` `model/list`
+RPC, including all visible pages, the recommended default, and reasoning effort
+metadata. Claude choices come from the configured Claude Code CLI through the
+Agent SDK's `supportedModels()` control request. The read sends no user prompt,
+disables hooks and session persistence, and closes the temporary process. Model
+availability and any upstream refresh remain the CLI's responsibility; CloudAgent
+does not keep a separate model-name catalog for these two providers.
+
+The model service caches successful reads in memory for five minutes and merges
+concurrent reads. Opening the composer model menu or model library reads on demand;
+settings read when opened. “Refresh models” uses `GET /:provider/models?refresh=true`
+to bypass this cache. Failed reads retry after 30 seconds (or immediately on manual
+refresh), retain any last successful list, and expose `DISCOVERY.status` as `stale`
+or `unavailable`. Custom model CRUD remains usable when the CLI is unavailable.
+Restarting the server discards the cache. Refresh after changing the CLI account
+or configuration to read its new list immediately.

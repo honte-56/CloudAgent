@@ -7,7 +7,6 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
-import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
 import {
   claudeRuntime,
   listClaudeSDKBackgroundWork,
@@ -15,6 +14,8 @@ import {
   stopClaudeSDKTask,
 } from '@/modules/providers/list/claude/claude-runtime.provider.js';
 import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
+
+const CLAUDE_TEST_MODELS = { OPTIONS: [{ value: 'default', label: 'Default' }], DEFAULT: 'default' };
 
 /**
  * The runtime keeps the CLI's stdin open after a turn's `result` while the
@@ -105,7 +106,7 @@ async function withRun(
   const context: ProviderRuntimeContext = {
     resolveProviderSessionId: () => previousNativeId,
     resolveResumeModel: async () => undefined,
-    getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+    getProviderModels: async () => CLAUDE_TEST_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
     createQuery,
@@ -330,7 +331,7 @@ test('a new turn stops the tasks the held process still has going before letting
   const context: Omit<ProviderRuntimeContext, 'createQuery'> = {
     resolveProviderSessionId: () => null,
     resolveResumeModel: async () => undefined,
-    getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+    getProviderModels: async () => CLAUDE_TEST_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
   };
@@ -381,7 +382,7 @@ test('a held process is still let go when stopping its tasks throws', async () =
   const context: Omit<ProviderRuntimeContext, 'createQuery'> = {
     resolveProviderSessionId: () => null,
     resolveResumeModel: async () => undefined,
-    getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+    getProviderModels: async () => CLAUDE_TEST_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
   };

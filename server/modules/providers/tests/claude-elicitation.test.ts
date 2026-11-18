@@ -7,13 +7,14 @@ import test from 'node:test';
 import type { ElicitationRequest, ElicitationResult } from '@anthropic-ai/claude-agent-sdk';
 
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
-import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
 import {
   getPendingApprovalsForSession,
   queryClaudeSDK,
   resolveToolApproval,
 } from '@/modules/providers/list/claude/claude-runtime.provider.js';
 import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
+
+const CLAUDE_TEST_MODELS = { OPTIONS: [{ value: 'default', label: 'Default' }], DEFAULT: 'default' };
 
 /**
  * An MCP server can ask the person for input in the middle of a tool call. The
@@ -53,7 +54,7 @@ async function withRun(
   const context: ProviderRuntimeContext = {
     resolveProviderSessionId: () => null,
     resolveResumeModel: async () => undefined,
-    getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+    getProviderModels: async () => CLAUDE_TEST_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
     createQuery,
@@ -175,7 +176,7 @@ test('an unattended run sets no callback, so the SDK declines at once instead of
     const context: ProviderRuntimeContext = {
       resolveProviderSessionId: () => null,
       resolveResumeModel: async () => undefined,
-      getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
+      getProviderModels: async () => CLAUDE_TEST_MODELS as never,
       normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
       isProviderInstalled: async () => true,
       createQuery: ({ options }) => {

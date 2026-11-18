@@ -1,7 +1,8 @@
+import { createProviderModelDiscovery } from '@/modules/providers/services/provider-model-discovery.service.js';
 import { appConfigDb, providerModelsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
-import type { IProvider } from '@/shared/interfaces.js';
+import type { IProvider } from '@/shared/index.js';
 import type {
   CustomProviderModelInput,
   CustomProviderModelRecord,
@@ -10,8 +11,8 @@ import type {
   ProviderModelOption,
   ProviderModelsDefinition,
   ProviderSessionModel,
-} from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+} from '@/shared/index.js';
+import { AppError } from '@/shared/index.js';
 
 /** Session-row access the service needs, narrowed so tests can stub it. */
 type ProviderModelsSessionStore = {
@@ -39,6 +40,7 @@ type ProviderModelsServiceDependencies = {
   catalog?: ProviderModelsCatalogStore;
   sessions?: ProviderModelsSessionStore;
   settings?: ProviderModelsSettingsStore;
+  now?: () => number;
 };
 
 /**
@@ -113,13 +115,15 @@ const mergeProviderModels = (
   const listOnlyCustomModels = customModelsOnly && customOptions.length > 0;
   const builtInIds = new Set(predefined.OPTIONS.map((option) => option.value));
   return {
+    ...(predefined.DISCOVERY ? { DISCOVERY: predefined.DISCOVERY } : {}),
     OPTIONS: listOnlyCustomModels
       ? customOptions
       : [
         ...predefined.OPTIONS.map((option) => ({ ...option, isCustom: false })),
         ...customOptions.filter((option) => !builtInIds.has(option.value)),
       ],
-    DEFAULT: listOnlyCustomModels ? customOptions[0].value : predefined.DEFAULT,
+    DEFAULT: listOnlyCustomModels ? customOptions[0].value : predefined.OPTIONS.length
+      ? predefined.DEFAULT : customOptions[0]?.value ?? predefined.DEFAULT,
     // Copied so no caller can mutate the shared capability matrix.
     EFFORT_LEVELS: [...readCustomModelEffortLevels(provider)],
     CUSTOM_MODELS_ONLY: customModelsOnly,
@@ -173,9 +177,9 @@ const isUniqueConstraintError = (error: unknown): boolean => (
  * Creates the provider model application service used by Providers routes,
  * Commands, and provider runtimes.
  *
- * Curated adapter definitions stay source-controlled and are merged at read
- * time with custom SQLite rows. This deliberately has no predefined-model
- * persistence, memory cache, disk cache, TTL, or provider-native discovery.
+ * Native CLI catalogs are cached briefly and merged at read time with custom
+ * SQLite rows. Manual refresh bypasses the cache; failures retain the last
+ * successful CLI response with an explicit stale status.
  * Tests inject a small custom-model store through the same boundary.
  */
 export const createProviderModelsService = (dependencies: ProviderModelsServiceDependencies = {}) => {
@@ -183,6 +187,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   const catalog = dependencies.catalog ?? providerModelsDb;
   const sessions = dependencies.sessions ?? sessionsDb;
   const settings = dependencies.settings ?? appConfigDb;
+  const discover = createProviderModelDiscovery(dependencies.now);
+  const readAdapterCatalog = (provider: LLMProvider, refresh = false) => discover(
+    provider, () => resolveProvider(provider).models.getSupportedModels(), refresh,
+  );
 
   const isCustomModelsOnly = (provider: LLMProvider): boolean => (
     settings.get(customModelsOnlyConfigKey(provider)) === 'true'
@@ -199,8 +207,8 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     isCustomModelsOnly(provider),
   );
 
-  const getProviderModels = async (provider: LLMProvider): Promise<ProviderModelsDefinition> => {
-    const predefined = await resolveProvider(provider).models.getSupportedModels();
+  const getProviderModels = async (provider: LLMProvider, refresh = false): Promise<ProviderModelsDefinition> => {
+    const predefined = await readAdapterCatalog(provider, refresh);
     return readMergedCatalog(provider, predefined);
   };
 
@@ -213,7 +221,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     provider: LLMProvider,
     enabled: boolean,
   ): Promise<ProviderModelsDefinition> => {
-    const predefined = await resolveProvider(provider).models.getSupportedModels();
+    const predefined = await readAdapterCatalog(provider);
     settings.set(customModelsOnlyConfigKey(provider), enabled ? 'true' : 'false');
     return readMergedCatalog(provider, predefined);
   };
@@ -264,7 +272,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     provider: LLMProvider,
     input: CustomProviderModelInput,
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
-    const predefined = await resolveProvider(provider).models.getSupportedModels();
+    const predefined = await readAdapterCatalog(provider);
     const normalized = normalizeCustomModelInput(input);
     assertModelIdAvailable(provider, predefined, normalized.id);
     assertEffortLevelsSupported(provider, normalized);
@@ -291,7 +299,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     recordId: number,
     input: CustomProviderModelInput,
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
-    const predefined = await resolveProvider(provider).models.getSupportedModels();
+    const predefined = await readAdapterCatalog(provider);
     readCustomModel(provider, recordId);
     const normalized = normalizeCustomModelInput(input);
     assertModelIdAvailable(provider, predefined, normalized.id, recordId);
@@ -325,7 +333,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     provider: LLMProvider,
     recordId: number,
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
-    const predefined = await resolveProvider(provider).models.getSupportedModels();
+    const predefined = await readAdapterCatalog(provider);
     readCustomModel(provider, recordId);
     // Sessions on the deleted model move to the default of the catalog left
     // behind: the first remaining custom model (the new DEFAULT) while only
@@ -437,7 +445,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
    *   1. the model recorded on the session row;
    *   2. the provider's own session state for externally-created sessions;
    *   3. `requestedModel`, the client's current default;
-   *   4. the source-controlled provider catalog default.
+   *   4. the provider catalog default.
    */
   const resolveSessionModel = async (
     provider: LLMProvider,
@@ -460,14 +468,14 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
         };
       }
 
-      const predefined = await resolveProvider(provider).models.getSupportedModels();
+      const predefined = await readAdapterCatalog(provider);
       const providerCatalog = readMergedCatalog(provider, predefined);
       const providerModel = await getCurrentActiveModel(provider, normalizedSessionId);
       const resolvedProviderModel = providerModel.model?.trim();
       // Adapters answer with their own built-in default when they know nothing
       // about the session. That value, not the merged default (a custom model
       // while only custom models are listed), is what means "no answer".
-      if (resolvedProviderModel && resolvedProviderModel !== predefined.DEFAULT) {
+      if (resolvedProviderModel && resolvedProviderModel !== predefined.DEFAULT && resolvedProviderModel !== 'default') {
         return {
           provider,
           sessionId: normalizedSessionId,

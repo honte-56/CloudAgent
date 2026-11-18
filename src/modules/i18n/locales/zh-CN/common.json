@@ -1,4 +1,12 @@
 {
+  "modelCatalog": {
+    "loading": "正在读取模型…",
+    "stale": "刷新失败，正在显示上次成功读取的列表。",
+    "unavailable": "无法读取模型，请检查 CLI 安装和登录状态后重试。",
+    "refresh": "刷新模型",
+    "title": "工具提供的模型",
+    "description": "由工具集成提供，只读"
+  },
   "buttons": {
     "save": "保存",
     "cancel": "取消",

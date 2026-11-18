@@ -6,7 +6,7 @@ import type { LLMProvider, ProviderModelOption, ProviderModelsDefinition } from 
 /** Loads the unfiltered catalog for the settings module's model visibility editor. */
 export function useAgentModels(provider: LLMProvider) {
   // Retains the request outcome so failed catalogs cannot be mistaken for an empty model list.
-  const [catalog, setCatalog] = useState<{ options: ProviderModelOption[]; status: 'loading' | 'ready' | 'error' }>({
+  const [catalog, setCatalog] = useState<{ options: ProviderModelOption[]; status: 'loading' | 'ready' | 'error'; discovery?: ProviderModelsDefinition['DISCOVERY'] }>({
     options: [], status: 'loading',
   });
   // A retry starts a new effect and cancels publication from the previous request.
@@ -17,13 +17,13 @@ export function useAgentModels(provider: LLMProvider) {
     setCatalog({ options: [], status: 'loading' });
     async function load() {
       try {
-        const response = await api.providers.models(provider);
+        const response = await api.providers.models(provider, attempt > 0);
         const body = await response.json() as { success?: boolean; data?: { models?: ProviderModelsDefinition } };
         if (!response.ok || !body.success || !Array.isArray(body.data?.models?.OPTIONS)) {
           throw new Error('Unable to load models.');
         }
         if (!cancelled) {
-          setCatalog({ options: body.data.models.OPTIONS, status: 'ready' });
+          setCatalog({ options: body.data.models.OPTIONS, status: 'ready', discovery: body.data.models.DISCOVERY });
         }
       } catch {
         if (!cancelled) {

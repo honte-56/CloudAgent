@@ -8,8 +8,8 @@ import type {
   LLMProvider,
   ProviderCurrentActiveModel,
   ProviderModelsDefinition,
-} from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+} from '@/shared/index.js';
+import { AppError } from '@/shared/index.js';
 
 const createModels = (value: string): ProviderModelsDefinition => ({
   OPTIONS: [{ value, label: value }],
@@ -152,7 +152,7 @@ const createTestService = (options: {
   return { service, catalog, sessions, settings };
 };
 
-test('provider catalogs merge source-controlled defaults with custom persistence rows', async () => {
+test('provider catalogs merge CLI choices with custom persistence rows', async () => {
   const calls: LLMProvider[] = [];
   const { service, catalog } = createTestService({ onCatalogRead: (provider) => calls.push(provider) });
 
@@ -628,4 +628,23 @@ test('resolveResumeModel never consults provider-global state', async () => {
 
   assert.equal(model, 'gpt-5.5');
   assert.equal(providerLookups, 0);
+});
+
+
+test('custom model CRUD remains available when native discovery fails', async () => {
+  const service = createProviderModelsService({
+    catalog: createCatalogStore(), sessions: createSessionStore(), settings: createSettingsStore(),
+    resolveProvider: () => ({ models: {
+      getSupportedModels: async () => { throw new Error('CLI not installed'); },
+      getCurrentActiveModel: async () => ({ model: '' }),
+    } }),
+  });
+  const created = await service.createCustomModel('codex', { id: 'custom-native-id', model: 'My model' });
+  assert.equal(created.models.DISCOVERY?.status, 'unavailable');
+  assert.equal(created.models.DEFAULT, 'custom-native-id');
+  assert.equal(created.models.OPTIONS.length, 1);
+  await service.updateCustomModel('codex', created.model.recordId!, { id: 'updated-id', model: 'Updated' });
+  assert.equal((await service.getProviderModels('codex')).DEFAULT, 'updated-id');
+  const deleted = await service.deleteCustomModel('codex', created.model.recordId!);
+  assert.deepEqual(deleted.models.OPTIONS, []);
 });

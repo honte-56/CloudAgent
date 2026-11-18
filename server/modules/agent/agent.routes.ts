@@ -625,13 +625,12 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
    *                        which is the first custom model while "Use only my models" is on. Cursor
    *                        without that setting leaves the choice to its CLI.
    *
-   *                        Claude models: 'default', 'sonnet', 'opus', 'haiku', 'sonnet[1m]', 'opus[1m]', 'fable'
+   *                        Claude models: read GET /api/providers/claude/models for the native CLI list.
    *                        Cursor models: 'gpt-5' (default), 'gpt-5.2', 'gpt-5.2-high', 'sonnet-4.5', 'opus-4.5',
    *                                       'composer-1', 'auto', 'gpt-5.1', 'gpt-5.1-high',
    *                                       'gpt-5.1-codex', 'gpt-5.1-codex-high', 'gpt-5.1-codex-max',
    *                                       'gpt-5.1-codex-max-high', 'opus-4.1', 'grok', and thinking variants
-   *                        Codex models: 'gpt-5.6-sol' (default), 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra',
-   *                                      'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'
+   *                        Codex models: read GET /api/providers/codex/models for native choices and default.
    *
    * @param {string} effort - (Optional) Reasoning effort for providers/models that support it.
    *                          Claude supports: 'low', 'medium', 'high', 'xhigh', 'max' depending on model.

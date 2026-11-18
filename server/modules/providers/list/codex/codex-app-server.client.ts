@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
-import { AppError } from '@/shared/utils.js';
+import { AppError } from '@/shared/index.js';
 
 /**
  * Minimal JSON-RPC client for `codex app-server`.
@@ -189,7 +189,31 @@ async function withAppServer<T>(
   }
 }
 
+/** Used by Providers' model, fork, and message-edit adapters for CLI-native RPCs. */
 export const codexAppServer = {
+  /** Reads all picker-visible pages without creating a thread or starting a turn. */
+  async listModels(): Promise<unknown[]> {
+    return withAppServer(async (call) => {
+      const models: unknown[] = [];
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = await call('model/list', {
+          limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}),
+        }) as { data?: unknown[]; nextCursor?: string | null } | undefined;
+        if (!Array.isArray(result?.data)) {
+          throw new AppError('Codex returned an invalid model list.', { code: 'INVALID_MODEL_LIST', statusCode: 502 });
+        }
+        models.push(...result.data);
+        cursor = result.nextCursor || undefined;
+        if (cursor && (cursors.has(cursor) || cursors.size >= 100)) {
+          throw new AppError('Codex model pagination did not finish.', { code: 'INVALID_MODEL_LIST', statusCode: 502 });
+        }
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      return models;
+    });
+  },
   /**
    * Copies a thread into a new one that ends at `lastTurnId`, or copies the
    * whole thread when it is omitted.

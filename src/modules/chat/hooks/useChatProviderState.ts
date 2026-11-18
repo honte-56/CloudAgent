@@ -33,10 +33,8 @@ const toProviderEffortOptions = (
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
   claude: 'default',
   cursor: 'gpt-5.3-codex',
-  // The server catalog's DEFAULT. A new browser keeps this model for as long
-  // as the catalog lists it, so it must be one the bundled Codex CLI knows;
-  // any other model runs on the CLI's fallback metadata.
-  codex: 'gpt-5.6-sol',
+  // Omit an explicit model until the CLI supplies its default.
+  codex: '',
   opencode: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -129,6 +127,7 @@ const getSessionSelectionKey = (provider: LLMProvider, sessionId: string): strin
   `${provider}:${sessionId}`
 );
 
+/** Used by ChatInterface to manage provider selections and native model catalogs. */
 export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
@@ -167,7 +166,9 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const [providerModelCatalog, setProviderModelCatalog] = useState<
     Partial<Record<LLMProvider, ProviderModelsDefinition>>
   >({});
-  const [providerModelsLoading, setProviderModelsLoading] = useState(true);
+  // Track concurrent reads independently so one provider cannot cancel another's refresh.
+  const [loadingModelProviders, setLoadingModelProviders] = useState<LLMProvider[]>(PROVIDERS);
+  const providerModelsLoading = loadingModelProviders.length > 0;
 
   const { visibleModels } = useModelVisibility();
   // Keep full metadata for session models and the library; only choices and new-chat defaults are filtered.
@@ -183,7 +184,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     }),
   ) as Partial<Record<LLMProvider, ProviderModelsDefinition>>, [providerModelCatalog, visibleModels]);
 
-  const providerModelsRequestIdRef = useRef(0);
+  const providerModelsRequestIdRef = useRef<Partial<Record<LLMProvider, number>>>({});
   const sessionSelectionLoadRequestIdRef = useRef(0);
   const sessionModelMutationIdRef = useRef(0);
   const sessionEffortMutationIdRef = useRef(0);
@@ -206,36 +207,40 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     localStorage.setItem(`${targetProvider}-effort`, effort);
   }, []);
 
-  const loadProviderModels = useCallback(async () => {
-    const requestId = providerModelsRequestIdRef.current + 1;
-    providerModelsRequestIdRef.current = requestId;
-    setProviderModelsLoading(true);
-
-    try {
-      // Each provider lands in the catalog as soon as it answers, so a slow
-      // one (OpenCode shells out to its CLI) cannot hold back the others.
-      await Promise.all(
-        PROVIDERS.map(async (p) => {
-          try {
-            const response = await api.providers.models(p);
-            const body = (await response.json()) as ProviderModelsApiResponse;
-            const models = body.success ? body.data?.models : undefined;
-            if (!models || providerModelsRequestIdRef.current !== requestId) {
-              return;
-            }
-
-            setProviderModelCatalog((previous) => ({ ...previous, [p]: models }));
-          } catch (error) {
-            console.error(`Error loading ${p} models:`, error);
-          }
-        }),
-      );
-    } finally {
-      if (providerModelsRequestIdRef.current === requestId) {
-        setProviderModelsLoading(false);
+  const loadProviderModels = useCallback(async (targetProvider?: LLMProvider, refresh = false) => {
+    await Promise.all((targetProvider ? [targetProvider] : PROVIDERS).map(async (p) => {
+      const requestId = (providerModelsRequestIdRef.current[p] ?? 0) + 1;
+      providerModelsRequestIdRef.current[p] = requestId;
+      setLoadingModelProviders((previous) => previous.includes(p) ? previous : [...previous, p]);
+      try {
+        const response = await api.providers.models(p, refresh);
+        const body = (await response.json()) as ProviderModelsApiResponse;
+        const models = body.success ? body.data?.models : undefined;
+        if (!response.ok || !models) throw new Error('Unable to load models.');
+        if (providerModelsRequestIdRef.current[p] === requestId) {
+          setProviderModelCatalog((previous) => ({ ...previous, [p]: models }));
+        }
+      } catch {
+        if (providerModelsRequestIdRef.current[p] === requestId) {
+          setProviderModelCatalog((previous) => {
+            const old = previous[p];
+            return { ...previous, [p]: {
+              ...(old ?? { OPTIONS: [], DEFAULT: FALLBACK_DEFAULT_MODEL[p] }),
+              DISCOVERY: { ...old?.DISCOVERY, status: old?.OPTIONS.length ? 'stale' : 'unavailable' },
+            } };
+          });
+        }
+      } finally {
+        if (providerModelsRequestIdRef.current[p] === requestId) {
+          setLoadingModelProviders((previous) => previous.filter((id) => id !== p));
+        }
       }
-    }
+    }));
   }, []);
+
+  const refreshCurrentModels = useCallback((refresh = false) => (
+    loadProviderModels(provider, refresh)
+  ), [loadProviderModels, provider]);
 
   useEffect(() => {
     void loadProviderModels();
@@ -371,7 +376,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     for (const targetProvider of PROVIDERS) {
       const catalog = visibleModelCatalog[targetProvider];
-      if (!catalog) {
+      if (!catalog || (catalog.DISCOVERY?.status === 'unavailable' && !catalog.OPTIONS.length)) {
         continue;
       }
 
@@ -831,7 +836,8 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     update: updateCustomModel,
     remove: removeCustomModel,
     setCustomModelsOnly,
-  }), [createCustomModel, removeCustomModel, setCustomModelsOnly, updateCustomModel]);
+    reload: loadProviderModels,
+  }), [createCustomModel, removeCustomModel, setCustomModelsOnly, updateCustomModel, loadProviderModels]);
 
   return {
     provider,
@@ -850,6 +856,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     cyclePermissionMode,
     providerModelCatalog,
     providerModelsLoading,
+    refreshCurrentModels,
     providerModelActions,
     selectProviderModel,
     selectProviderEffort,

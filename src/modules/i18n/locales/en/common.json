@@ -1,4 +1,12 @@
 {
+  "modelCatalog": {
+    "loading": "Reading models…",
+    "stale": "Refresh failed. Showing the last available list.",
+    "unavailable": "Unable to read models. Check the CLI installation and sign-in, then retry.",
+    "refresh": "Refresh models",
+    "title": "Provider models",
+    "description": "Provided by the agent integration; read-only"
+  },
   "buttons": {
     "save": "Save",
     "cancel": "Cancel",

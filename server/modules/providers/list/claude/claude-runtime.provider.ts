@@ -30,7 +30,6 @@ import {
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
 import {
-  CLAUDE_PREDEFINED_MODELS,
   CLAUDE_ULTRACODE_EFFORT
 } from '@/modules/providers/list/claude/claude-models.provider.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
@@ -119,7 +118,7 @@ function toElicitationResult(decision: (Partial<ProviderPermissionDecision> & { 
 // selection is translated back into the two options the SDK actually understands here.
 const ULTRACODE_SDK_EFFORT = 'xhigh';
 
-function resolveClaudeEffort(model: any, effort: any, modelsDefinition: any = CLAUDE_PREDEFINED_MODELS) {
+function resolveClaudeEffort(model: any, effort: any, modelsDefinition: any = undefined) {
   const selectedModel = modelsDefinition?.OPTIONS?.find((option: any) => option.value === model) || null;
   const allowedEfforts = selectedModel?.effort?.values
     ?.map((value: any) => value.value) || [];
@@ -327,12 +326,12 @@ function mapCliOptionsToSDK(options: any = {}) {
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
-  sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;
+  sdkOptions.model = options.model || 'default';
 
   applyClaudeEffort(sdkOptions, resolveClaudeEffort(
     sdkOptions.model,
     effort,
-    options.effortModels || CLAUDE_PREDEFINED_MODELS,
+    options.effortModels,
   ));
 
   sdkOptions.systemPrompt = {
@@ -1093,7 +1092,7 @@ async function queryClaudeSDK(command: any, options: any = {}, ws: any, context:
 
   try {
     const resolvedModel = await context.resolveResumeModel(sessionId, options.model);
-    let effortModels = CLAUDE_PREDEFINED_MODELS;
+    let effortModels;
     try {
       effortModels = await context.getProviderModels();
     } catch (error: any) {

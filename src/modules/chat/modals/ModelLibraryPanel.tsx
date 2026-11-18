@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { Badge, Button, Input, LLMProviderLogo } from '@/shared/ui';
+import { Badge, Button, Input, LLMProviderLogo, ModelCatalogStatus } from '@/shared/ui';
 import type {
   CustomProviderModelInput,
   LLMProvider,
@@ -76,6 +76,17 @@ export default function ModelLibraryPanel({
   useEffect(() => {
     setSelectedProvider(initialProvider);
   }, [initialProvider]);
+
+  // Tracks catalog reads in this panel independently from model mutations.
+  const [refreshingProviders, setRefreshingProviders] = useState<LLMProvider[]>([]);
+  const reload = actions.reload;
+  const refreshModels = useCallback(async (force = false) => {
+    if (!reload) return;
+    setRefreshingProviders((previous) => [...previous, selectedProvider]);
+    try { await reload(selectedProvider, force); }
+    finally { setRefreshingProviders((previous) => previous.filter((id) => id !== selectedProvider)); }
+  }, [reload, selectedProvider]);
+  useEffect(() => { void refreshModels(); }, [refreshModels]);
 
   const options = useMemo(
     () => providerModelCatalog[selectedProvider]?.OPTIONS ?? [],
@@ -496,13 +507,14 @@ export default function ModelLibraryPanel({
           <section>
             <div className="mb-2 flex items-center justify-between gap-3 px-1">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">Built-in models</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">Maintained by CloudAgent and read-only</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">{t('common:modelCatalog.title', { defaultValue: 'Provider models' })}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{t('common:modelCatalog.description', { defaultValue: 'Provided by the agent integration; read-only' })}</p>
               </div>
               {!builtInModelsHidden && (
                 <Badge variant="secondary" className="rounded-full text-[10px]">{predefinedModels.length}</Badge>
               )}
             </div>
+            <ModelCatalogStatus discovery={providerModelCatalog[selectedProvider]?.DISCOVERY} loading={refreshingProviders.includes(selectedProvider)} onRefresh={reload ? () => { void refreshModels(true); } : undefined} />
             {builtInModelsHidden ? (
               <div className="flex items-center gap-2 rounded-2xl border border-dashed border-border bg-background/60 px-4 py-3 text-xs text-muted-foreground">
                 <EyeOff className="h-3.5 w-3.5 shrink-0" />

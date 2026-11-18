@@ -1,4 +1,12 @@
 {
+  "modelCatalog": {
+    "loading": "正在讀取模型…",
+    "stale": "重新整理失敗，正在顯示上次成功讀取的清單。",
+    "unavailable": "無法讀取模型，請檢查 CLI 安裝和登入狀態後重試。",
+    "refresh": "重新整理模型",
+    "title": "工具提供的模型",
+    "description": "由工具整合提供，唯讀"
+  },
   "buttons": {
     "save": "儲存",
     "cancel": "取消",

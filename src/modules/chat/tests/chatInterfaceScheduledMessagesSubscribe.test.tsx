@@ -48,7 +48,7 @@ vi.mock('@/modules/task-master', () => ({
 }));
 vi.mock('@/modules/command-palette', () => ({ usePaletteOpsRegister: () => {} }));
 vi.mock('@/modules/chat/hooks/useChatProviderState', () => ({
-  useChatProviderState: () => ({ provider: 'claude', pendingPermissionRequests: [] }),
+  useChatProviderState: () => ({ provider: 'claude', pendingPermissionRequests: [], providerModelCatalog: {} }),
 }));
 vi.mock('@/modules/chat/hooks/useChatSessionState', () => ({
   useChatSessionState: () => ({

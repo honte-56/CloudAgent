@@ -118,6 +118,7 @@ function ChatInterface({
     cyclePermissionMode,
     providerModelCatalog,
     providerModelsLoading,
+    refreshCurrentModels,
     providerModelActions,
     selectProviderModel,
     selectProviderEffort,
@@ -562,6 +563,8 @@ function ChatInterface({
           availableModelOptions={currentProviderModelOptions}
           onSelectModel={handleSelectComposerModel}
           modelsLoading={providerModelsLoading}
+          modelDiscovery={providerModelCatalog[provider]?.DISCOVERY}
+          onRefreshModels={refreshCurrentModels}
           tokenBudget={tokenBudget}
           onShowTokenUsage={showCostModal}
           isEditingSentMessage={Boolean(editingAnchorId)}

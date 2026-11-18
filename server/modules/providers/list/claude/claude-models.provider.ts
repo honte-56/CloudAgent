@@ -1,17 +1,18 @@
 import { readFile } from 'node:fs/promises';
+import type { ModelInfo } from '@anthropic-ai/claude-agent-sdk';
+import { queryClaudeControl } from '@/modules/providers/services/claude-control-query.service.js';
 
 import { sessionsDb } from '@/modules/database/index.js';
-import type { IProviderModels } from '@/shared/interfaces.js';
+import type { IProviderModels } from '@/shared/index.js';
 import type {
   ProviderCurrentActiveModel,
   ProviderModelOption,
   ProviderModelsDefinition,
-} from '@/shared/types.js';
+} from '@/shared/index.js';
 import {
-  buildDefaultProviderCurrentActiveModel,
   isPlaceholderProviderModel,
   stripAnsiSequences,
-} from '@/shared/utils.js';
+} from '@/shared/index.js';
 
 /**
  * Ultracode is not one of the SDK's reasoning-effort levels. Selecting it runs the turn at
@@ -26,151 +27,6 @@ const ULTRACODE_EFFORT_OPTION = {
   description: 'Highest effort plus standing workflow orchestration.',
 };
 
-export const CLAUDE_PREDEFINED_MODELS: ProviderModelsDefinition = {
-  OPTIONS: [
-    {
-      value: 'default',
-      label: 'Default (recommended)',
-      description: 'Use the recommended model for your Claude account and deployment.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'max' },
-        ],
-      },
-    },
-    {
-      value: 'best',
-      label: 'Best available',
-      description: 'Use Fable 5 when available, otherwise the latest Opus model.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'fable',
-      label: 'Fable 5',
-      description: 'Most capable Claude model for the hardest, longest-running tasks.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'sonnet',
-      label: 'Sonnet',
-      description: 'Latest Sonnet model for everyday coding tasks.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'sonnet[1m]',
-      label: 'Sonnet (1M context)',
-      description: 'Latest Sonnet model with a 1M context window.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'opus',
-      label: 'Opus',
-      description: 'Latest Opus model for complex reasoning and coding tasks.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'opus[1m]',
-      label: 'Opus (1M context)',
-      description: 'Latest Opus model with a 1M context window.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-    {
-      value: 'haiku',
-      label: 'Haiku',
-      description: 'Fast and efficient Claude model for simple tasks.',
-    },
-    {
-      value: 'opusplan',
-      label: 'Opus Plan',
-      description: 'Use Opus while planning, then switch to Sonnet for execution.',
-      effort: {
-        default: 'high',
-        values: [
-          { value: 'low' },
-          { value: 'medium' },
-          { value: 'high' },
-          { value: 'xhigh' },
-          { value: 'max' },
-          ULTRACODE_EFFORT_OPTION,
-        ],
-      },
-    },
-  ],
-  DEFAULT: 'default',
-};
-
-export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
-  const normalizedModel = typeof model === 'string' ? model.trim() : '';
-  if (!normalizedModel) {
-    return null;
-  }
-
-  return CLAUDE_PREDEFINED_MODELS.OPTIONS.find((option) => option.value === normalizedModel) ?? null;
-};
 type ClaudeInitEvent = {
   sessionId?: string;
   session_id?: string;
@@ -276,25 +132,36 @@ const readClaudeSessionModelFromJsonl = async (
   return null;
 };
 
+/** Provider registry adapter reading the same model menu as Claude Code. */
 export class ClaudeProviderModels implements IProviderModels {
+  constructor(private readonly listModels: () => Promise<ModelInfo[]> = () =>
+    queryClaudeControl((instance) => instance.supportedModels())) {}
+
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    // claude creates a new jsonl file as a separate session for this request.
-    // As a result, it lists the workspace where this is invoked when it shouldn't.
-    //
-    // Disabled for now:
-    // const queryInstance = query({
-    //   prompt: 'Get supported models',
-    //   options: buildClaudeQueryOptions(),
-    // });
-    // const supportedModels = await queryInstance.supportedModels();
-    // queryInstance.close();
-    // return buildClaudeModelsDefinition(supportedModels);
-    return CLAUDE_PREDEFINED_MODELS;
+    const models = await this.listModels();
+    const options: ProviderModelOption[] = models.map((model) => {
+      const levels = model.supportsEffort === false ? [] : model.supportedEffortLevels ?? [];
+      return {
+        value: model.value,
+        label: model.displayName || model.value,
+        description: model.description,
+        ...(levels.length ? { effort: {
+          values: [
+            ...levels.map((value) => ({ value })),
+            ...(levels.includes('xhigh') ? [ULTRACODE_EFFORT_OPTION] : []),
+          ],
+        } } : {}),
+      };
+    });
+    return {
+      OPTIONS: options,
+      DEFAULT: options.find((option) => option.value === 'default')?.value ?? options[0]?.value ?? '',
+    };
   }
 
   async getCurrentActiveModel(sessionId?: string): Promise<ProviderCurrentActiveModel> {
     if (!sessionId?.trim()) {
-      return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
+      return { model: 'default' };
     }
 
     try {
@@ -309,6 +176,6 @@ export class ClaudeProviderModels implements IProviderModels {
       // Fall through to the provider default when the session-backed lookup fails.
     }
 
-    return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
+    return { model: 'default' };
   }
 }

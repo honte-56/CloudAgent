@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
-import type { ProviderModelOption } from '@/shared/types';
+import { ModelCatalogStatus } from '@/shared/ui';
+import type { ProviderModelOption, ProviderModelsDefinition } from '@/shared/types';
 import { DEFAULT_EFFORT_VALUE } from '@/shared/constants';
 import { useComposerMenuAnchor } from '@/modules/chat/hooks/useComposerMenuAnchor';
 import {
@@ -25,6 +26,8 @@ type ComposerModelMenuProps = {
   modelOptions: ProviderModelOption[];
   onSelectModel: (model: string) => void;
   modelsLoading: boolean;
+  discovery?: ProviderModelsDefinition['DISCOVERY'];
+  onRefresh?: (refresh?: boolean) => Promise<void>;
 };
 
 /**
@@ -39,6 +42,8 @@ function ComposerModelMenu({
   modelOptions,
   onSelectModel,
   modelsLoading,
+  discovery,
+  onRefresh,
 }: ComposerModelMenuProps) {
   const { t } = useTranslation('chat');
   const [isOpen, setIsOpen] = useState(false);
@@ -65,10 +70,10 @@ function ComposerModelMenu({
     () => modelOptions.find((option) => option.value === model) ?? null,
     [model, modelOptions],
   );
-  const modelLabel = selectedModelOption?.label || model;
+  const modelLabel = selectedModelOption?.label || model || t('composer.model', { defaultValue: 'Model' });
 
   const hasEffortSection = resolvedEffortOptions.length > 0;
-  const hasModelSection = modelOptions.length > 0 || modelsLoading;
+  const hasModelSection = modelOptions.length > 0 || modelsLoading || Boolean(onRefresh) || Boolean(discovery);
   if (!hasEffortSection && !hasModelSection) {
     return null;
   }
@@ -85,6 +90,7 @@ function ComposerModelMenu({
         type="button"
         onClick={() => {
           updateAnchor();
+          if (!isOpen) void onRefresh?.();
           setIsOpen((current) => !current);
         }}
         className="press flex h-8 max-w-20 shrink-0 items-center gap-1 rounded-full bg-muted px-2.5 text-xs font-medium text-foreground hover:bg-accent sm:h-9 sm:max-w-56 sm:px-3"
@@ -101,6 +107,7 @@ function ComposerModelMenu({
 
       {isOpen && anchor && createPortal(
         <ComposerMenuSurface anchor={anchor} menuRef={menuRef} ariaLabel={ariaLabel}>
+          <ModelCatalogStatus discovery={discovery} loading={modelsLoading} onRefresh={onRefresh ? () => { void onRefresh(true); } : undefined} />
           {hasEffortSection && (
             <>
               <ComposerMenuHeading>

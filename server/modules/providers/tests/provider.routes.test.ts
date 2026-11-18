@@ -12,6 +12,7 @@ import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/datab
 import providerRouter from '@/modules/providers/provider.routes.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionExecutionService } from '@/modules/providers/services/session-execution.service.js';
+import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerPlanUsageService } from '@/modules/providers/services/provider-plan-usage.service.js';
 import type { IProvider, IProviderRuntime } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary, WorkflowAgentActivity } from '@/shared/types.js';
@@ -687,5 +688,19 @@ test('execution takeover validates the owner and acknowledges only confirmed pro
       assert.equal(stops, 1);
       assert.equal(((await (await fetch(endpoint)).json()) as { data: { owner: null } }).data.owner, null);
     } finally { lease.release(); }
+  });
+});
+
+
+test('model route refreshes the CLI catalog only for an explicit refresh request', async (t) => {
+  const getModels = t.mock.method(providerModelsService, 'getProviderModels', async () => ({ OPTIONS: [], DEFAULT: '' }));
+  await withProviderServer(async (baseUrl) => {
+    for (const suffix of ['', '?refresh=false', '?refresh=true']) {
+      const response = await fetch(`${baseUrl}/api/providers/codex/models${suffix}`);
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(getModels.mock.calls.map((call) => call.arguments), [
+      ['codex', false], ['codex', false], ['codex', true],
+    ]);
   });
 });

@@ -5,12 +5,12 @@ import { useAgentModels } from '@/modules/settings/hooks/useAgentModels';
 import { useModelVisibility } from '@/shared/hooks/useModelVisibility';
 import type { LLMProvider } from '@/shared/types';
 import { filterVisibleModels } from '@/shared/utils';
-import { Button, Input } from '@/shared/ui';
+import { Button, Input, ModelCatalogStatus } from '@/shared/ui';
 
 /** Used by settings' AgentCategoryContentSection to choose conversation models for each agent. */
 export default function ModelsContent({ provider }: { provider: LLMProvider }) {
   const { t } = useTranslation('settings');
-  const { options, status, reload } = useAgentModels(provider);
+  const { options, status, reload, discovery } = useAgentModels(provider);
   const { visibleModels, saveVisibleModels } = useModelVisibility();
   // Keeps search local to this editor without changing which models are selected.
   const [query, setQuery] = useState('');
@@ -57,6 +57,7 @@ export default function ModelsContent({ provider }: { provider: LLMProvider }) {
         <h3 className="text-base font-semibold text-foreground">{t('models.title')}</h3>
         <p className="mt-1 text-sm text-muted-foreground">{t('models.description')}</p>
       </div>
+      <ModelCatalogStatus discovery={discovery} loading={status === 'loading'} onRefresh={reload} />
       {status === 'loading' && <p role="status" className="text-sm text-muted-foreground">{t('models.loading')}</p>}
       {status === 'error' && (
         <div role="alert" className="flex items-center justify-between gap-3 text-sm text-destructive">

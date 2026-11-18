@@ -77,7 +77,7 @@ export type ProviderModelOption = {
   description?: string;
   /** Stable SQLite row id used only by model-management actions. */
   recordId?: number;
-  /** True for user-created rows; false for immutable CloudCLI defaults. */
+  /** True for user-created rows; false for provider-supplied models. */
   isCustom?: boolean;
   effort?: {
     default?: string;
@@ -92,6 +92,8 @@ export type ProviderModelOption = {
  * Provider model catalog returned by `GET /api/providers/:provider/models`.
  */
 export type ProviderModelsDefinition = {
+  /** Native CLI catalog status; stale retains the last successful read, unavailable has no CLI choices. */
+  DISCOVERY?: { status: 'ready' | 'stale' | 'unavailable'; updatedAt?: string };
   OPTIONS: ProviderModelOption[];
   DEFAULT: string;
   /**

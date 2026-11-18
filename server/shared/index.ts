@@ -33,3 +33,15 @@ export type {
   FileTreeWorkspaceGateway,
 } from './types.js';
 export { FORBIDDEN_WORKSPACE_PATHS, WORKSPACES_ROOT, resolvePathUnderRoots, resolveReadOnlyRootPath } from './utils.js';
+
+// Providers' native catalog adapters, model service and tests use these shared contracts.
+export type {
+  ProviderCurrentActiveModel,
+  ProviderModelOption,
+  ProviderModelsDefinition,
+  ProviderSessionModel,
+  CustomProviderModelInput,
+  CustomProviderModelRecord,
+} from './types.js';
+export type { IProvider, IProviderModels } from './interfaces.js';
+export { isPlaceholderProviderModel, stripAnsiSequences, readObjectRecord, readOptionalString } from './utils.js';

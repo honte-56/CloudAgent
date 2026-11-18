@@ -15,7 +15,7 @@ import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, ArrowUpIcon, PencilIc
 import { useVoiceInput } from '@/modules/chat/hooks/useVoiceInput';
 import { useVoiceAvailable } from '@/modules/chat/hooks/useVoiceAvailable';
 import { MCP_ELICITATION_TOOL_NAME } from '@/shared/constants';
-import type { AttachmentUploadState, NativeQueuedMessage, QueuedDraft, ScheduledMessage, SlashCommand,SessionActivity,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
+import type { AttachmentUploadState, NativeQueuedMessage, QueuedDraft, ScheduledMessage, SlashCommand,SessionActivity,PendingPermissionRequest,PermissionMode,ProviderModelOption, ProviderModelsDefinition } from '@/shared/types';
 import {
   PromptInput,
   PromptInputHeader,
@@ -64,6 +64,8 @@ type ChatComposerProps = {
   availableModelOptions: ProviderModelOption[];
   onSelectModel: (model: string) => void;
   modelsLoading: boolean;
+  modelDiscovery?: ProviderModelsDefinition['DISCOVERY'];
+  onRefreshModels?: (refresh?: boolean) => Promise<void>;
   tokenBudget: Record<string, unknown> | null;
   onShowTokenUsage: () => void;
   slashCommandsCount: number;
@@ -147,6 +149,8 @@ export default function ChatComposer({
   availableModelOptions,
   onSelectModel,
   modelsLoading,
+  modelDiscovery,
+  onRefreshModels,
   tokenBudget,
   onShowTokenUsage,
   slashCommandsCount,
@@ -520,6 +524,8 @@ export default function ChatComposer({
               modelOptions={availableModelOptions}
               onSelectModel={onSelectModel}
               modelsLoading={modelsLoading}
+              discovery={modelDiscovery}
+              onRefresh={onRefreshModels}
             />
 
             <ComposerPermissionMenu

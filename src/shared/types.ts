@@ -42,6 +42,8 @@ export type ProviderModelOption = {
  * server lists only custom models and the first is `DEFAULT`. Older servers omit it, which means off.
  */
 export type ProviderModelsDefinition = {
+  /** Native CLI catalog status; stale retains the last successful read, unavailable has no CLI choices. */
+  DISCOVERY?: { status: 'ready' | 'stale' | 'unavailable'; updatedAt?: string };
   OPTIONS: ProviderModelOption[];
   DEFAULT: string;
   EFFORT_LEVELS?: string[];
@@ -64,6 +66,8 @@ export type CustomProviderModelInput = {
 
 /** Mutation callbacks a model menu calls to persist custom provider models. */
 export type ProviderModelActions = {
+  /** Reads the CLI catalog on demand; refresh bypasses the short server cache. */
+  reload?(provider: LLMProvider, refresh?: boolean): Promise<void>;
   create(provider: LLMProvider, input: CustomProviderModelInput): Promise<void>;
   update(
     provider: LLMProvider,

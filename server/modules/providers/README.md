@@ -420,3 +420,27 @@ refresh), retain any last successful list, and expose `DISCOVERY.status` as `sta
 or `unavailable`. Custom model CRUD remains usable when the CLI is unavailable.
 Restarting the server discards the cache. Refresh after changing the CLI account
 or configuration to read its new list immediately.
+
+
+### Independently installed Codex CLI
+
+Codex execution, model discovery, usage reads, authentication/version checks and
+Settings → Agents → Account all use the same external executable. Set
+`CLOUDCLI_CODEX_PATH` to its path, or make `codex` available on the server's `PATH`.
+Project-local `node_modules/.bin` entries and CloudAgent's own dependency binaries
+are excluded from automatic discovery. A missing CLI is reported as missing;
+there is no implicit fallback to the SDK's transitive CLI dependency.
+
+Install or update the independent CLI using the [official Codex installation
+instructions](https://learn.chatgpt.com/docs/codex/cli). On Linux and macOS:
+
+```sh
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+Once installed, Settings offers `codex update`, checks the latest stable version,
+and refuses an update while Codex sessions are busy. New child processes resolve
+the executable again, so updating the independent CLI does not require a
+CloudAgent upgrade. Refresh the model menu after a CLI update to read its new
+catalog immediately. The TypeScript SDK remains a transport dependency for the
+optional `exec` runtime, always supplied with the external executable explicitly.

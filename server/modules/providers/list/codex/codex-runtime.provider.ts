@@ -1,3 +1,4 @@
+import { resolveCodexExecutablePath } from '@/shared/index.js';
 /**
  * OpenAI Codex SDK Integration
  * =============================
@@ -321,9 +322,9 @@ async function queryCodex(
   const sessionKey = () => sessionId || capturedSessionId || null;
 
   try {
-    const codexPathOverride = process.env.CLOUDCLI_CODEX_PATH?.trim();
+    const codexPathOverride = resolveCodexExecutablePath();
     codex = new Codex({
-      ...(codexPathOverride ? { codexPathOverride } : {}),
+      codexPathOverride,
       ...(options.environment ? {
         env: options.environment,
         // Codex normally strips TOKEN variables from shell tools. The run-local

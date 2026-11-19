@@ -45,3 +45,6 @@ export type {
 } from './types.js';
 export type { IProvider, IProviderModels } from './interfaces.js';
 export { isPlaceholderProviderModel, stripAnsiSequences, readObjectRecord, readOptionalString } from './utils.js';
+
+// Providers resolve the same external Codex CLI for execution, metadata and updates.
+export { resolveCodexExecutablePath, probeCliVersion } from './utils.js';

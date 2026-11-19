@@ -407,3 +407,19 @@ describe('AccountContent CLI version row', () => {
     expect(calls).toEqual(['status:claude']);
   });
 });
+
+
+it('offers independent Codex updates using the version and command returned by the server', async () => {
+  responses.status = [claudeStatus({
+    provider: 'codex', installedVersion: '0.169.0', latestVersion: '0.170.0',
+    updateCommand: '/home/user/.local/bin/codex update',
+  })];
+  responses.update = () => json({ success: true, data: updateResult({
+    provider: 'codex', command: '/home/user/.local/bin/codex update',
+    previousVersion: '0.169.0', installedVersion: '0.170.0', output: 'Updated Codex',
+  }) });
+  render(<ProviderCliVersion agent="codex" installedVersion="0.169.0" textClass="" subtextClass="" />);
+  fireEvent.click(await screen.findByRole('button', { name: /Update to v0\.170\.0/ }));
+  await waitFor(() => expect(calls).toContain('update:codex'));
+  expect(screen.queryByText('Ships with CloudAgent and is updated together with it.')).toBeNull();
+});

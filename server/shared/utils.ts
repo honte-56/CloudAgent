@@ -1,5 +1,6 @@
 import { getGlobalImageAssetsDir, normalizeAttachmentDescriptors, type ChatAttachmentDescriptor } from '@/shared/image-attachments.js';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import {
   access,
@@ -1480,6 +1481,58 @@ export const terminalTextStyles = {
   dim: (text: string): string =>
     `${ANSI_TERMINAL_STYLES.dim}${text}${ANSI_TERMINAL_STYLES.reset}`,
 };
+
+// ---------------------------
+//----------------- EXTERNAL CODEX CLI RESOLUTION ------------
+/**
+ * Used by Providers' Codex transports, auth/version probe, and updater to select
+ * the same separately installed CLI. CLOUDCLI_CODEX_PATH is authoritative;
+ * otherwise search PATH, excluding npm's project-local .bin directories and
+ * executables inside this application's node_modules. Never fall back to the
+ * SDK's bundled CLI. Resolution is repeated so an atomic CLI update takes
+ * effect for new processes without restarting CloudAgent.
+ */
+export function resolveCodexExecutablePath(environment: NodeJS.ProcessEnv = process.env): string {
+  const configured = environment.CLOUDCLI_CODEX_PATH?.trim();
+  const pathKey = Object.keys(environment).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  const command = configured || 'codex';
+  const isPath = command.includes('/') || command.includes('\\');
+  const appModules = path.join(findApplicationRoot(getModuleDirectory(import.meta.url)), 'node_modules') + path.sep;
+  const directories = isPath ? [''] : (environment[pathKey] ?? '').split(path.delimiter).filter(Boolean);
+
+  for (const directory of directories) {
+    if (!configured && /(?:^|[/\\])node_modules[/\\]\.bin[/\\]?$/.test(directory)) continue;
+    for (const extension of extensions) {
+      const candidate = path.resolve(directory, command + extension);
+      try {
+        fs.accessSync(candidate, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
+        if (!fs.statSync(candidate).isFile()) continue;
+        if (!configured && fs.realpathSync(candidate).startsWith(appModules)) continue;
+        // The SDK spawns without a shell. Resolve the native binary behind a
+        // Windows npm shim using that external installation's own packages.
+        if (process.platform === 'win32' && /\.(cmd|bat|js)$/i.test(candidate)) {
+          const launcher = /\.js$/i.test(candidate) ? candidate
+            : path.join(path.dirname(candidate), 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+          if (fs.existsSync(launcher)) {
+            const require = createRequire(launcher);
+            const packagePath = require.resolve(`@openai/codex-win32-${process.arch}/package.json`);
+            const triple = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+            const binary = path.join(path.dirname(packagePath), 'vendor', triple, 'bin', 'codex.exe');
+            fs.accessSync(binary);
+            return binary;
+          }
+        }
+        return candidate;
+      } catch {
+        // Keep checking PATH; a missing explicit path must never select a different install.
+      }
+    }
+  }
+  throw new AppError('Codex CLI is not installed or executable. Install Codex separately and add it to PATH, or set CLOUDCLI_CODEX_PATH.', {
+    code: 'CODEX_CLI_NOT_INSTALLED', statusCode: 503,
+  });
+}
 
 // ---------------------------
 //----------------- CLI VERSION PROBE UTILITIES ------------

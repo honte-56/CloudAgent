@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createRequire } from 'node:module';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import spawn from 'cross-spawn';
+import { resolveCodexExecutablePath } from '@/shared/index.js';
 import readline from 'node:readline';
 
 import type { AnyRecord, CodexServerRequestHandler } from '@/shared/index.js';
@@ -26,11 +27,10 @@ export class CodexLiveClient {
     environment: NodeJS.ProcessEnv = process.env,
     private onRequest?: CodexServerRequestHandler,
   ) {
-    const pathOverride = !launcher ? process.env.CLOUDCLI_CODEX_PATH?.trim() : undefined;
-    this.child = spawn(pathOverride || process.execPath, pathOverride
-      ? ['app-server']
-      : [launcher || createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js'), 'app-server'],
-    { stdio: ['pipe', 'pipe', 'pipe'], env: environment });
+    // An explicit JS launcher is a test seam; production always uses the external CLI.
+    this.child = spawn(launcher ? process.execPath : resolveCodexExecutablePath(),
+      launcher ? [launcher, 'app-server'] : ['app-server'],
+      { stdio: ['pipe', 'pipe', 'pipe'], env: environment }) as ChildProcessWithoutNullStreams;
     this.reader = readline.createInterface({ input: this.child.stdout });
     this.child.stderr.on('data', (chunk) => { this.stderr = (this.stderr + String(chunk)).slice(-2000); });
     this.child.on('error', (error) => this.fail(error));

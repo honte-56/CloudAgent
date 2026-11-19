@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test, { afterEach, mock } from 'node:test';
@@ -118,9 +117,11 @@ async function withIsolatedCliEnv(fn: (binDir: string) => Promise<void>): Promis
     [pathKey]: process.env[pathKey],
     [pathExtKey]: process.env[pathExtKey],
     CLAUDE_CLI_PATH: process.env.CLAUDE_CLI_PATH,
+    CLOUDCLI_CODEX_PATH: process.env.CLOUDCLI_CODEX_PATH,
   };
 
   process.env[pathKey] = binDir;
+  delete process.env.CLOUDCLI_CODEX_PATH;
   process.env.CLAUDE_CLI_PATH = path.join(binDir, process.platform === 'win32' ? 'claude.cmd' : 'claude');
   if (process.platform === 'win32') {
     process.env[pathExtKey] = '.COM;.EXE;.BAT;.CMD';
@@ -221,11 +222,10 @@ test('each provider reports the version its CLI prints for --version', async () 
     assert.equal(openCodeStatus.installed, true);
     assert.equal(openCodeStatus.installedVersion, '1.18.25');
 
-    // Codex chats run the @openai/codex build CloudAgent depends on, not a `codex` on PATH.
-    const bundledCodex = createRequire(import.meta.url)('@openai/codex/package.json') as { version: string };
-    const codexStatus = await new CodexProviderAuth().getStatus();
-    assert.equal(codexStatus.installed, true);
-    assert.equal(codexStatus.installedVersion, bundledCodex.version);
+    const codex = await createFakeCli(binDir, 'codex');
+    await codex.set('version', 'codex-cli 0.170.0\n');
+    assert.deepEqual(new CodexProviderAuth().checkInstalled(), { installed: true, exitCode: 0, version: '0.170.0' });
+
   });
 });
 
@@ -427,7 +427,7 @@ test('getCliStatus does not ask the registry about a CLI that is not installed',
   });
 });
 
-test('Cursor has no npm release to compare with; Codex ships with CloudAgent', async () => {
+test('Cursor has no registry release; a missing external Codex is not replaced by the bundled CLI', async () => {
   await withIsolatedCliEnv(async (binDir) => {
     const cursor = await createFakeCli(binDir, 'cursor-agent');
     await cursor.set('version', '2026.07.20-8cc9c0b\n');
@@ -439,10 +439,10 @@ test('Cursor has no npm release to compare with; Codex ships with CloudAgent', a
     assert.equal(cursorStatus.updateUnavailableReason, null);
 
     const codexStatus = await service.getCliStatus('codex');
-    assert.equal(codexStatus.installed, true);
-    assert.equal(codexStatus.updateCommand, null);
-    assert.equal(codexStatus.updateUnavailableReason, 'bundled');
-    await rejectsWithAppError(service.updateCli('codex'), 'PROVIDER_CLI_UPDATE_UNAVAILABLE', 400);
+    assert.equal(codexStatus.installed, false);
+    assert.equal(codexStatus.updateCommand, 'codex update');
+    assert.equal(codexStatus.updateUnavailableReason, null);
+    await rejectsWithAppError(service.updateCli('codex'), 'PROVIDER_CLI_NOT_INSTALLED', 409);
 
   });
 });
@@ -836,5 +836,38 @@ test('updateCli flags a failure that the updater only prints, as `opencode upgra
     // The same words after a version change are not a failure of this run.
     await opencode.set('update-new-version', '1.19.1\n');
     assert.equal((await createService().updateCli('opencode')).failure, null);
+  });
+});
+
+
+test('Codex status and update use the configured external installation', async () => {
+  await withIsolatedCliEnv(async (binDir) => {
+    const codex = await createFakeCli(binDir, 'custom-codex');
+    process.env.CLOUDCLI_CODEX_PATH = path.join(binDir, process.platform === 'win32' ? 'custom-codex.cmd' : 'custom-codex');
+    await codex.set('version', 'codex-cli 0.169.0\n');
+    await codex.set('update-new-version', 'codex-cli 0.170.0\n');
+    const registry = createFakeRegistry(async () => jsonResponse({ version: '0.170.0' }));
+    const service = createService({ fetch: registry.fetch });
+    const before = await service.getCliStatus('codex');
+    assert.equal(before.installedVersion, '0.169.0');
+    assert.equal(before.updateAvailable, true);
+    assert.equal(before.updateUnavailableReason, null);
+    assert.ok(before.updateCommand?.endsWith(' update'));
+    assert.equal(registry.calls[0].url, 'https://registry.npmjs.org/@openai%2Fcodex/latest');
+    const result = await service.updateCli('codex');
+    assert.equal(result.previousVersion, '0.169.0');
+    assert.equal(result.installedVersion, '0.170.0');
+    assert.equal(result.failure, null);
+    assert.equal(await codex.read('update-count'), '1');
+  });
+});
+
+test('Codex updates wait until its active sessions have finished', async () => {
+  await withIsolatedCliEnv(async (binDir) => {
+    const codex = await createFakeCli(binDir, 'codex');
+    await codex.set('version', 'codex-cli 0.169.0\n');
+    const service = createService({ listBusyProviders: async () => ['codex'] });
+    await rejectsWithAppError(service.updateCli('codex'), 'PROVIDER_CLI_BUSY', 409);
+    assert.equal(await codex.read('update-count'), null);
   });
 });

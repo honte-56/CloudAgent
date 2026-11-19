@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
 import type { IProviderAuth } from '@/shared/interfaces.js';
 import type { CliVersionProbe, ProviderAuthStatus } from '@/shared/types.js';
-import { probeCliVersion, readObjectRecord, readOptionalString } from '@/shared/utils.js';
+import { probeCliVersion, readObjectRecord, readOptionalString, resolveCodexExecutablePath } from '@/shared/index.js';
 
 type CodexCredentialsStatus = {
   authenticated: boolean;
@@ -14,24 +13,19 @@ type CodexCredentialsStatus = {
   error?: string;
 };
 
+/** Used by the provider registry and CLI settings to report external Codex availability. */
 export class CodexProviderAuth implements IProviderAuth {
-  /**
-   * Checks whether the Codex CLI that chats run is available, and which version
-   * it is. That is the `@openai/codex` package CloudCLI depends on, which
-   * `@openai/codex-sdk` resolves from node_modules, not a `codex` on PATH.
-   */
+  /** Reports the version of the same external CLI used by chat and model discovery. */
   checkInstalled(): CliVersionProbe {
-    let launcherPath: string;
     try {
-      launcherPath = createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js');
+      return probeCliVersion(resolveCodexExecutablePath());
     } catch {
       return { installed: false, exitCode: null, version: null };
     }
-    return probeCliVersion(process.execPath, [launcherPath, '--version']);
   }
 
   /**
-   * Returns Codex SDK availability and credential status.
+   * Returns external Codex CLI availability and credential status.
    */
   async getStatus(): Promise<ProviderAuthStatus> {
     const { installed, version: installedVersion } = this.checkInstalled();

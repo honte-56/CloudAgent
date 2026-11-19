@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
+import spawn from 'cross-spawn';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
-import { AppError } from '@/shared/index.js';
+import { AppError, resolveCodexExecutablePath } from '@/shared/index.js';
 
 /**
  * Minimal JSON-RPC client for `codex app-server`.
@@ -43,23 +43,6 @@ export type CodexThreadFork = {
 };
 
 /**
- * Resolves the bundled fallback when no explicit CLOUDCLI_CODEX_PATH is set.
- * Forking uses the same configured CLI as live conversations so both agree
- * on the persisted thread format.
- */
-function resolveCodexLauncher(): string {
-  const require_ = createRequire(import.meta.url);
-  try {
-    return require_.resolve('@openai/codex/bin/codex.js');
-  } catch {
-    throw new AppError('The Codex CLI package is not installed, so Codex conversations cannot be branched.', {
-      code: 'CODEX_APP_SERVER_UNAVAILABLE',
-      statusCode: 501,
-    });
-  }
-}
-
-/**
  * Runs one exchange against a freshly spawned `codex app-server`.
  *
  * A process per operation rather than a pooled long-lived one: the handshake
@@ -71,12 +54,10 @@ function resolveCodexLauncher(): string {
 async function withAppServer<T>(
   run: (call: (method: string, params: unknown) => Promise<unknown>) => Promise<T>,
 ): Promise<T> {
-  const override = process.env.CLOUDCLI_CODEX_PATH?.trim();
-  const launcher = override || resolveCodexLauncher();
-  const child = spawn(override || process.execPath, override ? ['app-server'] : [launcher, 'app-server'], {
+  const child = spawn(resolveCodexExecutablePath(), ['app-server'], {
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }) as ChildProcessWithoutNullStreams;
 
   // The server logs sandbox and skill warnings to stderr on every start. They
   // are not failures and drowning the app log in them helps nobody, so stderr

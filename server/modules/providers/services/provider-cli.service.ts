@@ -1,3 +1,4 @@
+import { resolveCodexExecutablePath } from '@/shared/index.js';
 import spawn from 'cross-spawn';
 
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
@@ -43,9 +44,16 @@ type CliUpdater = {
 // Each CLI updates itself with its own updater. That updater knows how it was
 // installed (npm, a native installer, Homebrew, ...), which a blanket
 // `npm install -g` does not: on a native or Homebrew install it would add a
-// second copy that PATH may not even pick. Codex is absent on purpose: chats
-// run the @openai/codex build CloudAgent depends on, so it changes with CloudAgent.
+// second copy that PATH may not even pick. Codex also uses its external CLI.
 const CLI_UPDATERS: Partial<Record<LLMProvider, CliUpdater>> = {
+  codex: {
+    resolveCommand: () => {
+      try { return resolveCodexExecutablePath(); }
+      catch { return 'codex'; } // The availability probe reports missing installs before any update runs.
+    },
+    args: ['update'],
+    npmPackage: '@openai/codex',
+  },
   claude: {
     // undefined only on Windows when no CLI resolves: the SDK then runs its bundled binary.
     resolveCommand: () => resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH),

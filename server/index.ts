@@ -19,6 +19,7 @@ import {
 } from '@/modules/providers/index.js';
 import { chatRunRegistry, createWebSocketServer } from '@/modules/websocket/index.js';
 import { createStaticAssetsRouter } from '@/modules/static-assets/index.js';
+import { createRequestBodyMiddleware } from '@/modules/request-parsing/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -127,18 +128,7 @@ createWebSocketServer(server, {
 });
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
-app.use(express.json({
-    limit: '50mb',
-    type: (req) => {
-        // Skip multipart/form-data requests (for file uploads like images)
-        const contentType = req.headers['content-type'] || '';
-        if (contentType.includes('multipart/form-data')) {
-            return false;
-        }
-        return contentType.includes('json');
-    }
-}));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(createRequestBodyMiddleware());
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {

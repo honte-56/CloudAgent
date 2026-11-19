@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -38,6 +39,8 @@ type PtySessionEntry = {
   // program. A running CLI keeps its launch-time colours, so a reattaching
   // client needs this, not its own current theme, to know if they differ.
   claudeColorScheme: ShellColorScheme | null;
+  // Compare bindings on reconnect without storing the token in session metadata.
+  authenticationFingerprint: string;
   exited: Promise<void>;
   stop(): Promise<void>;
 };
@@ -119,6 +122,8 @@ function shouldAutoOpenUrlFromOutput(value: string): boolean {
 }
 
 type ShellWebSocketDependencies = {
+  authenticatedUserId?: number;
+  resolveProjectAuthentication?: (projectPath: string) => ReturnType<typeof import('@/modules/github-auth/index.js').resolveProjectGithubAuthentication>;
   resolveProviderSessionId: (
     sessionId: string,
     provider: string,
@@ -215,7 +220,8 @@ type ShellLaunch = {
 function buildShellCommand(
   message: ShellIncomingMessage,
   dependencies: ShellWebSocketDependencies,
-  projectPath: string
+  projectPath: string,
+  hasProjectAuthentication = false,
 ): ShellLaunch {
   const hasSession = readBoolean(message.hasSession);
   const initialCommand = readString(message.initialCommand);
@@ -240,13 +246,17 @@ function buildShellCommand(
   }
 
   if (provider === 'codex') {
+    // Match the managed Codex transports: its default environment filtering
+    // would otherwise remove the bound token before shell tools can use Git.
+    const command = hasProjectAuthentication
+      ? 'codex -c shell_environment_policy.ignore_default_excludes=true' : 'codex';
     if (resumeSessionId) {
       if (os.platform() === 'win32') {
-        return otherProgram(`codex resume "${resumeSessionId}"; if ($LASTEXITCODE -ne 0) { codex }`);
+        return otherProgram(`${command} resume "${resumeSessionId}"; if ($LASTEXITCODE -ne 0) { ${command} }`);
       }
-      return otherProgram(`codex resume "${resumeSessionId}" || codex`);
+      return otherProgram(`${command} resume "${resumeSessionId}" || ${command}`);
     }
-    return otherProgram('codex');
+    return otherProgram(command);
   }
 
   if (provider === 'opencode') {
@@ -573,6 +583,13 @@ export function handleShellConnection(
           projectPath = dependencies.resolveSessionProjectPath?.(sessionId) || projectPath;
         }
 
+        const authentication = dependencies.resolveProjectAuthentication
+          ? await dependencies.resolveProjectAuthentication(path.resolve(projectPath)) : null;
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const authenticationFingerprint = createHash('sha256')
+          .update(authentication?.environment.CLOUDCLI_GITHUB_TOKEN ?? '')
+          .digest('hex');
+
         urlDetectionBuffer = '';
         announcedAuthUrls.clear();
 
@@ -591,6 +608,8 @@ export function handleShellConnection(
         ptySessionKey = isPlainShell
           ? `shell:${projectPath}_${sessionId ?? 'default'}${commandSuffix}`
           : `${provider}:${nativeId || sessionId || projectPath}`;
+        // A retained PTY carries its launching user's project credentials.
+        ptySessionKey = `${dependencies.authenticatedUserId ?? 'legacy'}:${ptySessionKey}`;
 
         if (!isPlainShell && sessionId) {
           const owner = execution.get(sessionId, provider, nativeId);
@@ -615,6 +634,9 @@ export function handleShellConnection(
         const existingSession =
           isLoginCommand || forceRestart ? null : ptySessionsMap.get(ptySessionKey);
         if (existingSession) {
+          if (existingSession.authenticationFingerprint !== authenticationFingerprint) {
+            throw new Error('Project GitHub credential changed. Restart this terminal to use the current binding.');
+          }
           shellProcess = existingSession.pty;
           if (existingSession.timeoutId) {
             clearTimeout(existingSession.timeoutId);
@@ -665,6 +687,7 @@ export function handleShellConnection(
           data,
           dependencies,
           resolvedProjectPath,
+          Boolean(authentication),
         );
         const resumeSessionId = resolveResumeSessionId(data, dependencies);
         const claudeColorScheme = claudeFollowsAppTheme ? colorScheme : null;
@@ -673,7 +696,8 @@ export function handleShellConnection(
           os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
-        const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
+        const environment = authentication?.environment ?? process.env;
+        const prioritizedPath = prioritizeUserNpmGlobalBin(environment);
         if (ws.readyState !== WebSocket.OPEN) return;
 
         let resolveExit!: () => void;
@@ -704,7 +728,7 @@ export function handleShellConnection(
           rows: termRows,
           cwd: resolvedProjectPath,
           env: {
-            ...process.env,
+            ...environment,
             [prioritizedPath.key]: prioritizedPath.value,
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
@@ -728,6 +752,7 @@ export function handleShellConnection(
           projectPath,
           sessionId,
           claudeColorScheme,
+          authenticationFingerprint,
           exited,
           stop,
         });

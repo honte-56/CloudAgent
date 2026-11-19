@@ -1091,14 +1091,14 @@ export type GitCommandRunner = (args: string[], cwd: string) => Promise<GitComma
  * Executes `command args...` inside `options.cwd` and resolves with the captured output.
  *
  * This is the `spawnAsync` shape the Git routes module injects into its typed
- * services (branch deletion, branch compare) so their tests can substitute a
+ * services (branch deletion, branch compare, remote operations) so their tests can substitute a
  * fake runner. Like `GitCommandRunner`, the promise must reject on a non-zero
  * exit code, with `stderr` attached to the error when available.
  */
 export type GitProcessRunner = (
   command: string,
   args: string[],
-  options: { cwd: string },
+  options: { cwd: string; env?: NodeJS.ProcessEnv },
 ) => Promise<GitCommandResult>;
 
 /**

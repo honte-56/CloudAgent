@@ -309,7 +309,7 @@ export default function GitPanelHeader({
       {operationError && (
         <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span className="flex-1 leading-snug">{operationError}</span>
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-snug">{operationError}</span>
           <button
             onClick={onClearError}
             className="shrink-0 rounded p-0.5 hover:bg-destructive/20"

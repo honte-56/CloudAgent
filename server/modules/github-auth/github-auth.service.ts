@@ -44,7 +44,7 @@ export function rememberCloneGithubCredential(userId: number, projectPath: strin
   })();
 }
 
-/** Used by Providers before each run. Linked worktrees inherit the main repository binding unless explicitly bound themselves. */
+/** Used by Providers, Agent API, Git operations and terminals before launching project work. Linked worktrees inherit the main repository binding unless explicitly bound themselves. */
 export async function resolveProjectGithubAuthentication(userId: number, projectPath: string) {
   const project = projectsDb.getProjectPath(projectPath);
   let binding = project ? projectGithubCredentialsDb.get(userId, project.project_id) : null;

@@ -84,6 +84,11 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+function remoteOperationError(data: GitApiErrorResponse, fallback: string): string {
+  const message = data.error || fallback;
+  return data.details && data.details !== message ? `${message}\n${data.details}` : message;
+}
+
 async function readJson<T>(response: Response, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) {
     throw new DOMException('Request aborted', 'AbortError');
@@ -375,6 +380,7 @@ export function useGitPanelController({
     }
 
     setIsFetching(true);
+    setOperationError(null);
     try {
       const response = await api.git.fetch(selectedProject.projectId);
 
@@ -386,7 +392,7 @@ export function useGitPanelController({
         return;
       }
 
-      setOperationError(data.error ?? 'Fetch failed');
+      setOperationError(remoteOperationError(data, 'Fetch failed'));
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Fetch failed');
     } finally {
@@ -400,6 +406,7 @@ export function useGitPanelController({
     }
 
     setIsPulling(true);
+    setOperationError(null);
     try {
       const response = await api.git.pull(selectedProject.projectId);
 
@@ -410,7 +417,7 @@ export function useGitPanelController({
         return;
       }
 
-      setOperationError(data.error ?? 'Pull failed');
+      setOperationError(remoteOperationError(data, 'Pull failed'));
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Pull failed');
     } finally {
@@ -424,6 +431,7 @@ export function useGitPanelController({
     }
 
     setIsPushing(true);
+    setOperationError(null);
     try {
       const response = await api.git.push(selectedProject.projectId);
 
@@ -434,7 +442,7 @@ export function useGitPanelController({
         return;
       }
 
-      setOperationError(data.error ?? 'Push failed');
+      setOperationError(remoteOperationError(data, 'Push failed'));
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Push failed');
     } finally {
@@ -448,6 +456,7 @@ export function useGitPanelController({
     }
 
     setIsPublishing(true);
+    setOperationError(null);
     try {
       const response = await api.git.publish(selectedProject.projectId, currentBranch);
 
@@ -458,9 +467,9 @@ export function useGitPanelController({
         return;
       }
 
-      console.error('Publish failed:', data.error);
+      setOperationError(remoteOperationError(data, 'Publish failed'));
     } catch (error) {
-      console.error('Error publishing branch:', error);
+      setOperationError(error instanceof Error ? error.message : 'Publish failed');
     } finally {
       setIsPublishing(false);
     }

@@ -880,3 +880,117 @@ test('terminal resume uses the stored directory rather than a stale browser path
   assert.equal(launchedCwd, process.cwd());
   pty.emitExit();
 });
+
+for (const provider of ['plain-shell', 'claude', 'codex', 'cursor', 'opencode']) {
+  test(`project authentication reaches the ${provider} terminal without entering its command or frames`, async () => {
+    const socket = createFakeSocket();
+    const calls: Array<{ args: string | string[]; env?: Record<string, string | undefined> }> = [];
+    const paths: string[] = [];
+    const environment = { ...process.env, GH_TOKEN: 'terminal-test-secret', CLOUDCLI_GITHUB_TOKEN: 'terminal-test-secret', GIT_CONFIG_COUNT: '5' };
+    handleShellConnection(socket as never, {
+      execution: createSessionExecutionRegistry(() => null),
+      resolveProviderSessionId: () => null,
+      authenticatedUserId: 7,
+      resolveProjectAuthentication: async projectPath => {
+        paths.push(projectPath);
+        return { environment, instructions: '' };
+      },
+      spawnPty: ((_shell: string, args: string | string[], options?: { env?: Record<string, string | undefined> }) => {
+        calls.push({ args, env: options?.env });
+        return createFakePty();
+      }) as never,
+    });
+    socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), provider, sessionId: `project-auth-${provider}`, isPlainShell: provider === 'plain-shell' }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(paths, [process.cwd()]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].env?.CLOUDCLI_GITHUB_TOKEN, 'terminal-test-secret');
+    assert.equal(calls[0].env?.GIT_CONFIG_COUNT, '5');
+    assert.ok(!JSON.stringify(calls[0].args).includes('terminal-test-secret'));
+    if (provider === 'codex') assert.match(JSON.stringify(calls[0].args), /shell_environment_policy.ignore_default_excludes=true/);
+    assert.ok(!socket.frames.join('').includes('terminal-test-secret'));
+  });
+}
+
+test('a missing bound credential prevents terminal launch and does not fall back', async () => {
+  const socket = createFakeSocket();
+  let launches = 0;
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => null,
+    authenticatedUserId: 7,
+    resolveProjectAuthentication: async () => { throw new Error('Bound GitHub credential unavailable'); },
+    spawnPty: (() => { launches += 1; return createFakePty(); }) as never,
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), provider: 'plain-shell' }));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(launches, 0);
+  assert.match(socket.frames.join(''), /Bound GitHub credential unavailable/);
+});
+
+test('a socket closed while resolving credentials cannot launch a terminal', async () => {
+  const socket = createFakeSocket();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let launches = 0;
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => null,
+    authenticatedUserId: 7,
+    resolveProjectAuthentication: async () => { await pending; return null; },
+    spawnPty: (() => { launches += 1; return createFakePty(); }) as never,
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), provider: 'plain-shell' }));
+  socket.readyState = WebSocket.CLOSED;
+  socket.emit('close');
+  release();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(launches, 0);
+});
+
+test('retained terminals are scoped to the authenticated user', async () => {
+  const sessions = [createFakeSocket(), createFakeSocket()];
+  let launches = 0;
+  for (const [index, socket] of sessions.entries()) {
+    handleShellConnection(socket as never, {
+      resolveProviderSessionId: () => null,
+      authenticatedUserId: index + 7,
+      resolveProjectAuthentication: async () => ({ environment: { CLOUDCLI_GITHUB_TOKEN: 'same-test-token' }, instructions: '' }),
+      spawnPty: (() => { launches += 1; return createFakePty(); }) as never,
+    });
+    socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), sessionId: 'auth-user-scoping', provider: 'plain-shell' }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  assert.equal(launches, 2);
+  assert.ok(sessions.every(socket => !socket.frames.join('').includes('Reconnected')));
+});
+
+test('reconnect refuses an old credential and an explicit restart resolves the new binding', async () => {
+  let token = 'old-test-token';
+  const launches: string[] = [];
+  const dependencies: Parameters<typeof handleShellConnection>[1] = {
+    resolveProviderSessionId: () => null,
+    authenticatedUserId: 7,
+    resolveProjectAuthentication: async () => ({ environment: { CLOUDCLI_GITHUB_TOKEN: token }, instructions: '' }),
+    spawnPty: ((_shell: string, _args: string[], options: { env: Record<string, string> }) => {
+      launches.push(options.env.CLOUDCLI_GITHUB_TOKEN);
+      const fake = createFakePty();
+      fake.kill = () => fake.emitExit();
+      return fake;
+    }) as never,
+  };
+  const init = { type: 'init', projectPath: process.cwd(), sessionId: 'auth-rotation', provider: 'plain-shell' };
+  const first = createFakeSocket();
+  handleShellConnection(first as never, dependencies);
+  first.emit('message', JSON.stringify(init));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  token = 'new-test-token';
+  const next = createFakeSocket();
+  handleShellConnection(next as never, dependencies);
+  next.emit('message', JSON.stringify(init));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(launches, ['old-test-token']);
+  assert.match(next.frames.join(''), /Restart this terminal/);
+  assert.ok(!next.frames.join('').includes('Reconnected'));
+  next.emit('message', JSON.stringify({ ...init, forceRestart: true }));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(launches, ['old-test-token', 'new-test-token']);
+});

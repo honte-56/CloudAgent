@@ -7,6 +7,8 @@ import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-au
 import { handlePluginWsProxy } from '@/modules/websocket/services/plugin-websocket-proxy.service.js';
 import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
 import { handleDesktopNotificationsConnection } from '@/modules/notifications/index.js';
+import { resolveProjectGithubAuthentication } from '@/modules/github-auth/index.js';
+import { AppError } from '@/shared/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketServerDependencies = {
@@ -99,7 +101,17 @@ export function createWebSocketServer(
     const pathname = new URL(url, 'http://localhost').pathname;
 
     if (pathname === '/shell') {
-      handleShellConnection(ws, dependencies.shell);
+      const userId = Number(incomingRequest.user?.id ?? incomingRequest.user?.userId);
+      handleShellConnection(ws, {
+        ...dependencies.shell,
+        authenticatedUserId: userId,
+        resolveProjectAuthentication: async (projectPath) => {
+          if (!Number.isSafeInteger(userId) || userId <= 0) {
+            throw new AppError('Authentication required', { code: 'UNAUTHORIZED', statusCode: 401 });
+          }
+          return resolveProjectGithubAuthentication(userId, projectPath);
+        },
+      });
       return;
     }
 

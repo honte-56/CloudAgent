@@ -19,6 +19,10 @@ export type { CodexServerRequestHandler, ProviderPermissionDecision, NativeQueue
 // GitHub auth and Providers share the non-secret runtime instruction envelope.
 export { LEGACY_GITHUB_AUTH_INSTRUCTIONS, prependRuntimeInstructions } from './utils.js';
 
+// Git remote operations share subprocess contracts and stderr-aware diagnostics.
+export type { GitProcessRunner } from './types.js';
+export { getGitErrorDetails } from './utils.js';
+
 // File Tree composition, services and tests share filesystem and path-policy contracts.
 export type {
   FileTreeDirectoryEntry,

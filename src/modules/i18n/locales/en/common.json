@@ -174,7 +174,7 @@
       "existingPlaceholder": "/path/to/existing/workspace",
       "newPlaceholder": "/path/to/new/workspace",
       "existingHelp": "Full path to your existing workspace directory",
-      "newHelp": "Enter a full path, or a folder name under your saved default directory. Missing directories will be created.",
+      "newHelp": "Your saved default directory is filled in automatically. You can enter a different full path or a folder name under the default directory. Missing directories will be created.",
       "githubUrl": "GitHub URL (Optional)",
       "githubPlaceholder": "https://github.com/username/repository",
       "githubHelp": "Optional: provide a GitHub URL to clone a repository",
@@ -205,7 +205,7 @@
       "noAuthentication": "No authentication",
       "sshKey": "SSH Key",
       "existingInfo": "The workspace will be added to your project list and will be available for Claude/Cursor sessions.",
-      "newWithClone": "The repository will be cloned from this folder.",
+      "newWithClone": "A folder named after the repository will be created inside the selected directory.",
       "newEmpty": "The workspace will be added to your project list and will be available for Claude/Cursor sessions.",
       "cloningRepository": "Cloning repository..."
     },

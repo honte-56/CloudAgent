@@ -1,5 +1,5 @@
 import { readUserPreference, subscribeToUserPreferences } from '@/shared/userSettings';
-import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,8 +18,10 @@ type ProjectCreationWizardProps = {
   onProjectCreated?: (project?: Record<string, unknown>) => void;
 };
 
-const initialFormState: WizardFormState = {
-  workspacePath: '',
+// An untouched path follows the saved preference, including when it loads after the wizard opens.
+type WizardDraft = Omit<WizardFormState, 'workspacePath'> & { workspacePath?: string };
+
+const initialFormState: WizardDraft = {
   githubUrl: '',
   tokenMode: 'none',
   selectedGithubToken: '',
@@ -33,14 +35,20 @@ export default function ProjectCreationWizard({
 }: ProjectCreationWizardProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<WizardStep>(1);
-  const [formState, setFormState] = useState<WizardFormState>(initialFormState);
+  const [formState, setFormState] = useState(initialFormState);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cloneProgress, setCloneProgress] = useState('');
 
   const defaultDirectory = useSyncExternalStore(subscribeToUserPreferences, () => readUserPreference('defaultProjectDirectory', ''));
-  const workspacePath = defaultDirectory && formState.workspacePath.trim() && !/^(?:[/\\~]|[A-Za-z]:)/.test(formState.workspacePath.trim())
-    ? joinFolderPath(defaultDirectory, formState.workspacePath) : formState.workspacePath;
+  const shouldCloneRepository = isCloneWorkflow(formState.githubUrl);
+  const displayedPath = formState.workspacePath ?? defaultDirectory;
+  const enteredPath = formState.workspacePath?.trim();
+  // The clone service creates the repository subfolder inside the supplied directory.
+  const cloneParentFallback = shouldCloneRepository ? defaultDirectory : '';
+  const workspacePath = defaultDirectory && enteredPath && !/^(?:[/\\~]|[A-Za-z]:)/.test(enteredPath)
+    ? joinFolderPath(defaultDirectory, enteredPath)
+    : displayedPath.trim() || cloneParentFallback;
   const shouldLoadTokens = step === 1;
 
   const autoSelectToken = useCallback((tokenId: string) => {
@@ -72,13 +80,13 @@ export default function ProjectCreationWizard({
     setError(null);
 
     if (step === 1) {
-      if (!formState.workspacePath.trim()) {
+      if (!workspacePath) {
         setError(t('projectWizard.errors.providePath'));
         return;
       }
       setStep(2);
     }
-  }, [formState.workspacePath, step, t]);
+  }, [workspacePath, step, t]);
 
   const handleBack = useCallback(() => {
     setError(null);
@@ -91,8 +99,6 @@ export default function ProjectCreationWizard({
     setCloneProgress('');
 
     try {
-      const shouldCloneRepository = isCloneWorkflow(formState.githubUrl);
-
       if (shouldCloneRepository) {
         const project = await cloneWorkspaceWithProgress(
           {
@@ -129,12 +135,7 @@ export default function ProjectCreationWizard({
     } finally {
       setIsCreating(false);
     }
-  }, [formState, workspacePath, onClose, onProjectCreated, t]);
-
-  const shouldCloneRepository = useMemo(
-    () => isCloneWorkflow(formState.githubUrl),
-    [formState.githubUrl],
-  );
+  }, [formState, shouldCloneRepository, workspacePath, onClose, onProjectCreated, t]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
@@ -167,7 +168,7 @@ export default function ProjectCreationWizard({
           )}
           {step === 1 && (
             <StepConfiguration
-              workspacePath={formState.workspacePath}
+              workspacePath={displayedPath}
               githubUrl={formState.githubUrl}
               tokenMode={formState.tokenMode}
               selectedGithubToken={formState.selectedGithubToken}

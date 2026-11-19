@@ -43,21 +43,21 @@ const MODE_APPEARANCE: Record<PermissionMode, ModeAppearance> = {
     icon: Bot,
     label: 'Auto Mode',
     trigger:
-      'bg-primary/12 text-primary hover:bg-primary/18',
+      'bg-primary/[0.12] text-primary hover:bg-primary/[0.18]',
     item: 'text-primary',
   },
   acceptEdits: {
     icon: Smile,
     label: 'Accept Edits',
     trigger:
-      'bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18 dark:text-emerald-300',
+      'bg-emerald-500/[0.12] text-emerald-700 hover:bg-emerald-500/[0.18] dark:text-emerald-300',
     item: 'text-green-700 dark:text-green-300',
   },
   bypassPermissions: {
     icon: AlertTriangle,
     label: 'Bypass Permissions',
     trigger:
-      'bg-orange-500/12 text-orange-700 hover:bg-orange-500/18 dark:text-orange-300',
+      'bg-orange-500/[0.12] text-orange-700 hover:bg-orange-500/[0.18] dark:text-orange-300',
     item: 'text-orange-600 dark:text-orange-400',
   },
   plan: {
@@ -145,9 +145,12 @@ function ComposerPermissionMenu({
         })}
         title={t('input.clickToChangeMode')}
       >
-        <ActiveIcon className="h-4 w-4 shrink-0" />
-        {/* Named, not just drawn: the mode decides what the next message may change. */}
-        {isNameShown && <span className="truncate">{activeModeLabel}</span>}
+        {/* Keep the capsule mounted for its color transition; fade only the new contents. */}
+        <span key={permissionMode} className="flex min-w-0 animate-fade-in items-center justify-center gap-1.5">
+          <ActiveIcon className="h-4 w-4 shrink-0" />
+          {/* Named, not just drawn: the mode decides what the next message may change. */}
+          {isNameShown && <span className="truncate">{activeModeLabel}</span>}
+        </span>
       </button>
 
       {isOpen && anchor && createPortal(

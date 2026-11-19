@@ -3,7 +3,7 @@ import { Activity, Archive, Folder, MessageSquare, MoreHorizontal } from 'lucide
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { ActionMenu, Tooltip } from '@/shared/ui';
+import { ActionMenu, PillBar, Tooltip } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import type { SidebarSearchMode } from '@/shared/types';
 import { useTabOverflow } from '@/modules/sidebar/hooks/useTabOverflow';
@@ -55,16 +55,19 @@ export default function SidebarModeTabs({
 
     const button = (
       <button
+        type="button"
         onClick={() => onSearchModeChange(tab.mode)}
         aria-pressed={isActive}
+        // Measurement copies must never become targets for the sliding thumb.
+        data-pill-active={canGrow ? isActive : undefined}
         aria-label={tab.showLabel ? undefined : tab.label}
         title={tab.showLabel ? undefined : tab.label}
         className={cn(
-          'press flex min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium',
+          'press relative z-[1] flex min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium',
           tab.mode === 'archived' && 'px-3',
           canGrow && tab.showLabel && 'flex-1',
           isActive
-            ? 'bg-card text-foreground shadow-raised dark:bg-accent'
+            ? 'text-foreground'
             : 'text-muted-foreground hover:text-foreground',
           isActive && tab.mode === 'running' && 'ring-1 ring-emerald-500/20',
         )}
@@ -110,8 +113,8 @@ export default function SidebarModeTabs({
   );
 
   return (
-    <div className="rounded-full bg-foreground/[0.05] p-1 dark:bg-foreground/[0.06]">
-      <div ref={rowRef} className="relative flex">
+    <PillBar className="flex bg-foreground/[0.05] dark:bg-foreground/[0.06]">
+      <div ref={rowRef} className="relative flex w-full">
         {visibleIndexes.map((index) => (
           <Fragment key={tabs[index].mode}>{renderTab(tabs[index], true)}</Fragment>
         ))}
@@ -132,6 +135,6 @@ export default function SidebarModeTabs({
           </div>
         </div>
       </div>
-    </div>
+    </PillBar>
   );
 }

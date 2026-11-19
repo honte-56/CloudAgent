@@ -2,10 +2,20 @@ import assert from 'node:assert/strict';
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { TFunction } from 'i18next';
-import { test, vi } from 'vitest';
+import { afterEach, beforeEach, test, vi } from 'vitest';
 
 import type { SidebarSearchMode } from '@/shared/types';
 import SidebarModeTabs from '@/modules/sidebar/SidebarModeTabs';
+
+beforeEach(() => {
+  // jsdom has no layout observer; the strip's initial measurement is stubbed below.
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    disconnect() {}
+  });
+});
+
+afterEach(() => vi.unstubAllGlobals());
 
 /**
  * The strip has to survive a sidebar dragged down to its 220px minimum. jsdom

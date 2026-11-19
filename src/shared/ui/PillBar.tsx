@@ -36,7 +36,7 @@ function placeThumb(bar: HTMLElement, thumb: HTMLElement, animate: boolean) {
 }
 
 /**
- * Used by the project-workspace and settings modules as the segmented tab strip.
+ * Used by the project-workspace, settings and sidebar modules as the segmented tab strip.
  * A single thumb travels between pills on a spring instead of each pill painting
  * its own selected background, so switching tabs reads as one object moving.
  */
